@@ -6,11 +6,11 @@ AI-powered automatic detection of 29 cephalometric landmarks from lateral cephal
 
 | Metric | This Model | Khan et al. (2025) |
 |--------|-----------|-------------------|
-| **MRE** | **0.83 ± 0.64 mm** | 1.69 ± 3.36 mm |
-| **SDR@2mm** | **94.69%** | 81.18% |
-| **SDR@2.5mm** | **97.52%** | 87.28% |
-| **SDR@3mm** | **98.83%** | 90.82% |
-| **SDR@4mm** | **99.63%** | 94.82% |
+| **MRE** | **** | 1.69 ± 3.36 mm |
+| **SDR@2mm** | **** | 81.18% |
+| **SDR@2.5mm** | **** | 87.28% |
+| **SDR@3mm** | **** | 90.82% |
+| **SDR@4mm** | **** | 94.82% |
 
 ## Installation
 
