@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+venv/
+.env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Data / Datasets
+data/
+dataset/
+datasets/
+images/
+xray/
+xrays/
+*.png
+*.jpg
+*.jpeg
+*.dcm
+
+# Models
+*.h5
+*.pt
+*.pth
+*.onnx
+
+# OS
+.DS_Store
+Thumbs.db

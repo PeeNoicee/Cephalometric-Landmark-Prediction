@@ -1,0 +1,30 @@
+# Cephalometric Landmark Detection - Requirements
+# Python 3.10+ recommended
+
+# Deep Learning
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Image Processing
+opencv-python>=4.8.0
+Pillow>=10.0.0
+albumentations>=1.3.0
+
+# Data Processing
+numpy>=1.24.0
+pandas>=2.0.0
+scikit-learn>=1.3.0
+
+# Visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# Training Utilities
+tqdm>=4.65.0
+tensorboard>=2.13.0
+
+# Model Architecture
+segmentation-models-pytorch>=0.3.3
+
+# Optional: GPU monitoring
+pynvml>=11.0.0
