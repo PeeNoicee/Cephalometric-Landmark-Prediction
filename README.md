@@ -12,6 +12,23 @@ AI-powered automatic detection of 29 cephalometric landmarks from lateral cephal
 | **SDR@3mm** | **** | 90.82% |
 | **SDR@4mm** | **** | 94.82% |
 
+## Metrics
+
+### MRE (Mean Radial Error)
+
+**MRE** is the average distance between the predicted landmark and the ground-truth landmark.
+
+- **Unit:** millimeters (mm)
+- **Lower is better**
+
+### SDR@Xmm (Success Detection Rate)
+
+**SDR@Xmm** is the percentage of landmarks whose prediction error is within **X mm**.
+
+- **Unit:** percentage (%)
+- **Higher is better**
+- Example: **SDR@2.0mm = 94%** means **94% of landmarks** are predicted within **2.0 mm** of the ground truth.
+
 ## Installation
 
 ```bash

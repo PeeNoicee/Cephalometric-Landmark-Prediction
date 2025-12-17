@@ -370,6 +370,8 @@ class TrainerV2:
             'optimizer_state_dict': self.optimizer.state_dict(),
             'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler else None,
             'mre': metrics['MRE'],
+            'best_mre': self.best_mre,
+            'best_epoch': self.best_epoch,
             'config': {
                 'MODEL_ARCH': self.config.MODEL_ARCH,
                 'LOSS_TYPE': self.config.LOSS_TYPE,
@@ -387,9 +389,11 @@ class TrainerV2:
         if is_best:
             path = os.path.join(self.config.CHECKPOINT_DIR, 'best_model.pth')
             torch.save(checkpoint, path)
+            best_epoch_path = os.path.join(self.config.CHECKPOINT_DIR, f'best_model_epoch_{epoch+1}.pth')
+            torch.save(checkpoint, best_epoch_path)
             print(f"Saved best model with MRE: {metrics['MRE']:.2f} mm")
     
-    def train(self):
+    def train(self, start_epoch: int = 0):
         """Full training loop"""
         print("\n" + "="*80)
         print("TRAINING V2 - Improved Settings for Benchmark Performance")
@@ -401,8 +405,14 @@ class TrainerV2:
         print(f"Learning rate: {self.config.LEARNING_RATE}")
         print(f"Coord extraction: {self.config.COORD_EXTRACTION_METHOD}")
         print("="*80 + "\n")
-        
-        for epoch in range(self.config.NUM_EPOCHS):
+
+        if start_epoch < 0:
+            start_epoch = 0
+        if start_epoch >= self.config.NUM_EPOCHS:
+            print(f"Start epoch {start_epoch} is >= NUM_EPOCHS ({self.config.NUM_EPOCHS}). Nothing to do.")
+            return
+
+        for epoch in range(start_epoch, self.config.NUM_EPOCHS):
             # Train
             train_loss, train_lm_loss = self.train_epoch(epoch)
             print(f"\nEpoch {epoch+1} - Train Loss: {train_loss:.4f}, Landmark Loss: {train_lm_loss:.4f}")
@@ -466,6 +476,8 @@ def main():
     
     # Create trainer
     trainer = TrainerV2(config)
+
+    start_epoch = 0
     
     # Resume if specified
     if args.resume:
@@ -475,11 +487,27 @@ def main():
         trainer.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         if checkpoint['scheduler_state_dict']:
             trainer.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-        trainer.best_mre = checkpoint.get('mre', float('inf'))
-        print(f"Resumed from epoch {checkpoint['epoch']+1}, MRE: {trainer.best_mre:.2f}")
+        start_epoch = int(checkpoint.get('epoch', -1)) + 1
+        trainer.best_mre = checkpoint.get('best_mre', checkpoint.get('mre', float('inf')))
+        trainer.best_epoch = checkpoint.get('best_epoch', start_epoch)
+
+        # If a separate best_model exists, use its MRE to seed best tracking so we don't
+        # overwrite a better checkpoint after resuming.
+        best_path = os.path.join(config.CHECKPOINT_DIR, 'best_model.pth')
+        if os.path.exists(best_path):
+            try:
+                best_ckpt = torch.load(best_path, map_location='cpu', weights_only=False)
+                best_mre = best_ckpt.get('mre', None)
+                if best_mre is not None and float(best_mre) < float(trainer.best_mre):
+                    trainer.best_mre = float(best_mre)
+                    trainer.best_epoch = int(best_ckpt.get('epoch', -1)) + 1
+            except Exception:
+                pass
+
+        print(f"Resumed from epoch {start_epoch}, best MRE so far: {trainer.best_mre:.2f} mm")
     
     # Train
-    trainer.train()
+    trainer.train(start_epoch=start_epoch)
 
 
 if __name__ == '__main__':
