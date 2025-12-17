@@ -72,8 +72,8 @@ class CephalometricGUI:
         self.current_pixel_spacing = self.config.DEFAULT_PIXEL_SPACING
         self.pixel_spacing_by_id = {}
         
-        # Dataset path
-        self.dataset_path = r"C:\Users\clyde\Special Problem\AI Cephalometric Model_Xenodent\dataset"
+        # Dataset path - use relative path for portability
+        self.dataset_path = os.path.join(os.path.dirname(__file__), "dataset")
 
         self._load_pixel_spacing_map()
         
@@ -543,13 +543,89 @@ class CephalometricGUI:
         self.gt_landmarks = None
         self.gt_status.config(text="GT: Not found", fg='#ff6666')
         
+    def validate_xray_image(self, image):
+        """Validate if image is likely an X-ray based on medical imaging characteristics"""
+        try:
+            # Convert to grayscale for analysis
+            gray_image = image.convert('L')
+            width, height = gray_image.size
+            
+            # Check if image has appropriate X-ray characteristics
+            import numpy as np
+            img_array = np.array(gray_image)
+            
+            # X-rays typically have high contrast and specific intensity distribution
+            mean_intensity = np.mean(img_array)
+            std_intensity = np.std(img_array)
+            
+            # Check brightness range (X-rays are typically dark with bright bones)
+            if mean_intensity > 120:  # Too bright, unlikely to be X-ray
+                return False, "Image appears too bright for a medical X-ray"
+            
+            # Check contrast (X-rays need good contrast to show anatomical structures)
+            if std_intensity < 30:  # Too low contrast, unlikely to be medical image
+                return False, "Image lacks contrast typical of medical X-rays"
+            
+            # Check intensity distribution - X-rays should have bimodal distribution (dark background, bright bones)
+            hist, _ = np.histogram(img_array, bins=50)
+            # Look for significant dark background (should have peak in lower intensity range)
+            dark_pixels = np.sum(hist[:10])  # First 20% of intensity range
+            total_pixels = np.sum(hist)
+            dark_ratio = dark_pixels / total_pixels
+            
+            if dark_ratio < 0.3:  # Less than 30% dark pixels, unlikely to be X-ray
+                return False, "Image doesn't have characteristic dark background of X-rays"
+            
+            # Check size (medical X-rays are typically high resolution)
+            min_dimension = 600  # Increased minimum for medical quality
+            if width < min_dimension or height < min_dimension:
+                return False, f"Image resolution too low for medical X-ray (minimum {min_dimension}px)"
+            
+            # Check for unnatural patterns (too uniform or too noisy)
+            # Calculate texture measure using local standard deviation
+            from scipy import ndimage
+            if len(img_array.shape) == 2:
+                # Simple texture measure
+                kernel = np.ones((5,5))/25
+                blurred = ndimage.convolve(img_array.astype(float), kernel)
+                texture = np.std(img_array - blurred)
+                
+                if texture < 5:  # Too smooth, likely synthetic
+                    return False, "Image appears too uniform for a medical X-ray"
+            
+            return True, "Valid cephalometric X-ray image"
+            
+        except Exception as e:
+            return False, f"Error validating image: {str(e)}"
+
     def load_and_display_image(self, filepath):
-        """Load and display the image"""
+        """Load and display the image with X-ray validation"""
         try:
             self.original_image = Image.open(filepath)
             if self.original_image.mode != 'RGB':
                 self.original_image = self.original_image.convert('RGB')
+            
+            # Validate if it's likely an X-ray
+            is_valid, message = self.validate_xray_image(self.original_image)
+            
+            if not is_valid:
+                # Clear the image and show error
+                self.original_image = None
+                self.canvas.delete("all")
+                self.canvas.create_text(
+                    500, 400, 
+                    text="Please upload a valid cephalometric X-ray image",
+                    font=('Segoe UI', 14), 
+                    fill='#ff6666', 
+                    tags='placeholder'
+                )
+                messagebox.showerror("Invalid Image Type", 
+                    f"This doesn't appear to be a cephalometric X-ray.\n\n{message}\n\n"
+                    "Please upload a lateral cephalometric radiograph.")
+                return
+            
             self.display_image_on_canvas(self.original_image)
+            
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load image: {str(e)}")
             
@@ -730,8 +806,50 @@ class CephalometricGUI:
         
         return img_tensor, (orig_w, orig_h)
         
+    def validate_landmark_predictions(self, coords, heatmaps):
+        """Validate if landmark predictions are reasonable for cephalometric analysis"""
+        try:
+            # Check if coordinates are within reasonable bounds
+            height, width = heatmaps.shape[2:]  # Heatmap dimensions
+            
+            # Check if landmarks are clustered (bad sign)
+            coord_range_x = np.max(coords[:, 0]) - np.min(coords[:, 0])
+            coord_range_y = np.max(coords[:, 1]) - np.min(coords[:, 1])
+            
+            # Cephalometric landmarks should be spread across the image
+            min_range_x = width * 0.3  # At least 30% of image width
+            min_range_y = height * 0.4  # At least 40% of image height
+            
+            if coord_range_x < min_range_x or coord_range_y < min_range_y:
+                return False, "Landmarks appear too clustered for a cephalometric X-ray"
+            
+            # Check heatmap confidence (average peak intensity)
+            peak_values = []
+            for i in range(heatmaps.shape[1]):  # For each landmark
+                landmark_heatmap = heatmaps[0, i]  # First batch, i-th landmark
+                peak_values.append(np.max(landmark_heatmap))
+            
+            avg_confidence = np.mean(peak_values)
+            
+            # If average confidence is too low, likely not a cephalogram
+            if avg_confidence < 0.3:
+                return False, "Model confidence too low - image may not be a cephalometric X-ray"
+            
+            # Check for anatomical plausibility - landmarks should form reasonable patterns
+            # Basic check: some landmarks should be in upper region, some in lower
+            upper_landmarks = coords[coords[:, 1] < height * 0.5]  # Upper half
+            lower_landmarks = coords[coords[:, 1] >= height * 0.5]  # Lower half
+            
+            if len(upper_landmarks) < 8 or len(lower_landmarks) < 8:
+                return False, "Landmark distribution doesn't match cephalometric anatomy"
+            
+            return True, "Valid landmark predictions"
+            
+        except Exception as e:
+            return False, f"Error validating predictions: {str(e)}"
+
     def analyze_image(self):
-        """Run model inference"""
+        """Run model inference with validation"""
         if self.original_image is None:
             return
             
@@ -757,6 +875,21 @@ class CephalometricGUI:
             coords = coords.cpu().numpy()[0]
             coords[:, 0] *= scale_x
             coords[:, 1] *= scale_y
+            
+            # Validate landmark predictions
+            is_valid, message = self.validate_landmark_predictions(coords, pred_heatmaps.cpu().numpy())
+            
+            if not is_valid:
+                # Clear landmarks and show error
+                self.landmarks = None
+                self.confidences = None
+                self.display_image_on_canvas(self.original_image)  # Show image without landmarks
+                messagebox.showerror("Analysis Failed", 
+                    f"Unable to detect cephalometric landmarks.\n\n{message}\n\n"
+                    "Please ensure this is a lateral cephalometric radiograph.")
+                self.status_label.config(text="Analysis failed - Invalid image")
+                return
+            
             # Confidence threshold removed; we still keep a placeholder confidences array
             confidences = np.ones((coords.shape[0],), dtype=np.float32)
 
