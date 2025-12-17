@@ -1,5 +1,5 @@
 """
-GUI for Cephalometric Landmark Detection
+GUI for Cephalometric Landmark DetecPrediction
 
 Features:
 - Load and analyze cephalometric X-ray images
@@ -50,8 +50,8 @@ LANDMARK_SHORT = [
 class CephalometricGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("Cephalometric Landmark Detection - With Ground Truth")
-        self.root.geometry("1500x950")
+        self.root.title("Cephalometric Landmark Prediction - With Ground Truth")
+        self.root.geometry("1800x950")
         self.root.configure(bg='#2b2b2b')
         
         # Variables
@@ -65,8 +65,10 @@ class CephalometricGUI:
         self.show_predictions = tk.BooleanVar(value=True)
         self.show_ground_truth = tk.BooleanVar(value=True)
         self.show_lines = tk.BooleanVar(value=True)
+        self.show_labels = tk.BooleanVar(value=True)
         self.coord_method = tk.StringVar(value=getattr(self.config, 'COORD_EXTRACTION_METHOD', 'argmax'))
         self.model_path = None
+        self.model_checkpoint_meta = None
         self.current_pixel_spacing = self.config.DEFAULT_PIXEL_SPACING
         self.pixel_spacing_by_id = {}
         
@@ -80,6 +82,9 @@ class CephalometricGUI:
         
         # Create UI
         self.create_ui()
+        
+        # Legend window (hidden by default)
+        self.legend_window = None
 
     def _load_pixel_spacing_map(self):
         mapping_path = os.path.join(self.dataset_path, "cephalogram_machine_mappings.csv")
@@ -101,11 +106,8 @@ class CephalometricGUI:
             return
 
     def _set_current_pixel_spacing(self, image_id: str | None):
-        if not image_id:
-            self.current_pixel_spacing = self.config.DEFAULT_PIXEL_SPACING
-            return
-
-        self.current_pixel_spacing = self.pixel_spacing_by_id.get(image_id, self.config.DEFAULT_PIXEL_SPACING)
+        # Simplified: use default pixel spacing for all images
+        self.current_pixel_spacing = self.config.DEFAULT_PIXEL_SPACING
         
     def load_model(self):
         """Load the trained model"""
@@ -120,8 +122,23 @@ class CephalometricGUI:
                 checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
                 self.model.load_state_dict(checkpoint['model_state_dict'])
                 self.model_path = checkpoint_path
+                if isinstance(checkpoint, dict):
+                    self.model_checkpoint_meta = {
+                        'epoch': checkpoint.get('epoch', None),
+                        'mre': checkpoint.get('mre', None),
+                        'best_mre': checkpoint.get('best_mre', None),
+                        'best_epoch': checkpoint.get('best_epoch', None),
+                    }
                 print(f"Loaded model from {checkpoint_path}")
-                print(f"  Epoch: {checkpoint.get('epoch', 'N/A')}")
+                ckpt_epoch = checkpoint.get('epoch', None)
+                try:
+                    if ckpt_epoch is None:
+                        print("  Epoch: N/A")
+                    else:
+                        # train.py stores 0-based epoch in checkpoint; logs print epoch+1
+                        print(f"  Epoch: {int(ckpt_epoch) + 1}")
+                except Exception:
+                    print(f"  Epoch: {ckpt_epoch}")
                 best_mre = checkpoint.get('best_mre', None)
                 if best_mre is not None:
                     print(f"  Best MRE: {best_mre:.2f} mm")
@@ -168,6 +185,15 @@ class CephalometricGUI:
 
             epoch = checkpoint.get('epoch', None) if isinstance(checkpoint, dict) else None
             best_mre = checkpoint.get('best_mre', None) if isinstance(checkpoint, dict) else None
+            if isinstance(checkpoint, dict):
+                self.model_checkpoint_meta = {
+                    'epoch': checkpoint.get('epoch', None),
+                    'mre': checkpoint.get('mre', None),
+                    'best_mre': checkpoint.get('best_mre', None),
+                    'best_epoch': checkpoint.get('best_epoch', None),
+                }
+            else:
+                self.model_checkpoint_meta = None
 
             msg = f"Loaded model: {os.path.basename(checkpoint_path)}"
             if epoch is not None:
@@ -197,7 +223,7 @@ class CephalometricGUI:
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
         # Left panel - Controls
-        left_panel = tk.Frame(main_frame, bg='#3c3c3c', width=320)
+        left_panel = tk.Frame(main_frame, bg='#3c3c3c', width=400)
         left_panel.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
         left_panel.pack_propagate(False)
         
@@ -273,6 +299,11 @@ class CephalometricGUI:
                       variable=self.show_lines, bg='#3c3c3c', fg='#ffffff',
                       selectcolor='#2b2b2b', activebackground='#3c3c3c',
                       command=self.refresh_display).pack(anchor=tk.W, padx=5)
+        
+        tk.Checkbutton(options_frame, text="Show Labels", 
+                      variable=self.show_labels, bg='#3c3c3c', fg='#00ffff',
+                      selectcolor='#2b2b2b', activebackground='#3c3c3c',
+                      command=self.refresh_display).pack(anchor=tk.W, padx=5)
 
         method_frame = tk.Frame(options_frame, bg='#3c3c3c')
         method_frame.pack(fill=tk.X, padx=5, pady=(4, 2))
@@ -302,7 +333,7 @@ class CephalometricGUI:
             state=tk.DISABLED
         )
         self.analyze_btn.pack(pady=10)
-        
+
         # Metrics display
         metrics_frame = tk.LabelFrame(left_panel, text="Comparison Metrics", 
                                        bg='#3c3c3c', fg='white', font=('Segoe UI', 10))
@@ -328,22 +359,33 @@ class CephalometricGUI:
         if self.model_path is not None:
             self.status_label.config(text=f"Model: {os.path.basename(self.model_path)}")
         
-        # Landmark list with scrollbar
+        # Landmark list with scrollbars
         list_frame = tk.Frame(left_panel, bg='#3c3c3c')
         list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
         
         tk.Label(list_frame, text="Landmarks (Pred vs GT):", font=('Segoe UI', 10, 'bold'),
                 bg='#3c3c3c', fg='white').pack(anchor=tk.W)
         
-        scrollbar = tk.Scrollbar(list_frame)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        # Create frame for listbox and scrollbars
+        listbox_frame = tk.Frame(list_frame, bg='#3c3c3c')
+        listbox_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Vertical scrollbar
+        v_scrollbar = tk.Scrollbar(listbox_frame, orient="vertical")
+        v_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Horizontal scrollbar
+        h_scrollbar = tk.Scrollbar(listbox_frame, orient="horizontal")
+        h_scrollbar.pack(side=tk.BOTTOM, fill=tk.X)
         
         self.landmark_listbox = tk.Listbox(
-            list_frame, font=('Consolas', 8), bg='#1e1e1e', fg='#cccccc',
-            selectbackground='#0078d4', yscrollcommand=scrollbar.set, height=18
+            listbox_frame, font=('Consolas', 8), bg='#1e1e1e', fg='#cccccc',
+            selectbackground='#0078d4', yscrollcommand=v_scrollbar.set, 
+            xscrollcommand=h_scrollbar.set, height=18
         )
         self.landmark_listbox.pack(fill=tk.BOTH, expand=True)
-        scrollbar.config(command=self.landmark_listbox.yview)
+        v_scrollbar.config(command=self.landmark_listbox.yview)
+        h_scrollbar.config(command=self.landmark_listbox.xview)
         
         # Legend
         legend_frame = tk.Frame(left_panel, bg='#3c3c3c')
@@ -351,10 +393,53 @@ class CephalometricGUI:
         tk.Label(legend_frame, text="● Prediction  ■ Ground Truth", 
                 font=('Segoe UI', 9), bg='#3c3c3c', fg='#888888').pack()
         
-        # Right panel - Image
+        # Right panel - Image and Legend
         right_panel = tk.Frame(main_frame, bg='#1e1e1e')
         right_panel.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
         
+        # Legend panel on right side
+        legend_frame = tk.LabelFrame(right_panel, text="Landmark Legend", 
+                                     bg='#3c3c3c', fg='white', font=('Segoe UI', 10))
+        legend_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=5, pady=5)
+        legend_frame.configure(width=280)  # Set fixed width for legend panel
+        legend_frame.pack_propagate(False)  # Prevent frame from shrinking
+        
+        # Simple frame for legend (no scrollbars)
+        legend_content = tk.Frame(legend_frame, bg='#3c3c3c')
+        legend_content.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Headers
+        header_frame = tk.Frame(legend_content, bg='#3c3c3c')
+        header_frame.pack(fill=tk.X, pady=5)
+        
+        tk.Label(header_frame, text="No.", font=('Segoe UI', 10, 'bold'), 
+                bg='#3c3c3c', fg='white', width=3).pack(side=tk.LEFT, padx=1)
+        tk.Label(header_frame, text="Abbr.", font=('Segoe UI', 10, 'bold'), 
+                bg='#3c3c3c', fg='white', width=5).pack(side=tk.LEFT, padx=1)
+        tk.Label(header_frame, text="Name", font=('Segoe UI', 10, 'bold'), 
+                bg='#3c3c3c', fg='white').pack(side=tk.LEFT, padx=1)
+        
+        # Separator
+        separator = tk.Frame(legend_content, height=1, bg='#555555')
+        separator.pack(fill=tk.X, pady=2)
+        
+        # Landmark entries (all 29 landmarks)
+        for i, (short_name, full_name) in enumerate(zip(LANDMARK_SHORT, LANDMARK_NAMES)):
+            entry_frame = tk.Frame(legend_content, bg='#3c3c3c')
+            entry_frame.pack(fill=tk.X, pady=1)
+            
+            # Alternating row colors
+            bg_color = '#444444' if i % 2 == 0 else '#3c3c3c'
+            entry_frame.configure(bg=bg_color)
+            
+            tk.Label(entry_frame, text=f"{i+1:2d}", font=('Segoe UI', 8), 
+                    bg=bg_color, fg='#aaaaaa', width=3).pack(side=tk.LEFT, padx=1)
+            tk.Label(entry_frame, text=short_name, font=('Segoe UI', 8, 'bold'), 
+                    bg=bg_color, fg='#00ffff', width=5).pack(side=tk.LEFT, padx=1)
+            tk.Label(entry_frame, text=full_name[:25] + "..." if len(full_name) > 25 else full_name, 
+                    font=('Segoe UI', 8), bg=bg_color, fg='white').pack(side=tk.LEFT, padx=1)
+        
+        # Canvas for image
         self.canvas = tk.Canvas(right_panel, bg='#1e1e1e', highlightthickness=0)
         self.canvas.pack(fill=tk.BOTH, expand=True)
         
@@ -408,7 +493,7 @@ class CephalometricGUI:
             self.landmark_listbox.delete(0, tk.END)
             self.mre_label.config(text="MRE: --")
             self.sdr_label.config(text="SDR@2mm: --")
-            
+
     def load_ground_truth(self, image_path):
         """Load ground truth annotations for the image"""
         # Get image ID from filename
@@ -502,11 +587,59 @@ class CephalometricGUI:
         
         # Draw ground truth (squares)
         if self.show_ground_truth.get() and gt_landmarks is not None:
+            # Track label positions to avoid overlaps
+            label_positions = []
+            
             for i, gt in enumerate(gt_landmarks):
                 x, y = int(gt[0] * scale), int(gt[1] * scale)
                 size = 5
                 draw.rectangle([x-size, y-size, x+size, y+size], 
                               fill=None, outline='#ff6600', width=2)
+                
+                # Add landmark number and short name for ground truth if labels enabled
+                if self.show_labels.get():
+                    # Show only landmark names (no numbers)
+                    short_name = LANDMARK_SHORT[i] if i < len(LANDMARK_SHORT) else f"L{i+1}"
+                    label = short_name
+                    
+                    # Position label centered above landmark
+                    label_width = len(label) * 6  # Estimate text width
+                    label_x = x - label_width // 2  # Center horizontally
+                    label_y = y - 15  # Move above the point
+                    
+                    # Check for overlaps and adjust position
+                    for pos_x, pos_y, label_width, label_height in label_positions:
+                        # Simple overlap detection
+                        if (abs(label_x - pos_x) < label_width and 
+                            abs(label_y - pos_y) < label_height):
+                            # Move label up to avoid overlap
+                            label_y = pos_y - label_height - 2
+                    
+                    # Estimate label size (rough approximation)
+                    label_height = 10
+                    label_positions.append((label_x, label_y, label_width, label_height))
+                    
+                    draw.text((label_x, label_y), label, fill='#ff6600')
+                else:
+                    # Show only numbers when labels are disabled
+                    label = str(i+1)
+                    label_width = len(label) * 6
+                    label_x = x - label_width // 2
+                    label_y = y - 15
+                    
+                    # Check for overlaps
+                    for pos_x, pos_y, label_width, label_height in label_positions:
+                        if (abs(label_x - pos_x) < label_width and 
+                            abs(label_y - pos_y) < label_height):
+                            label_y = pos_y - label_height - 2
+                    
+                    label_height = 10
+                    label_positions.append((label_x, label_y, label_width, label_height))
+                    
+                    draw.text((label_x, label_y), label, fill='#ff6600')
+        else:
+            # Initialize empty label_positions for prediction labels to use
+            label_positions = []
         
         # Draw predictions (circles)
         if self.show_predictions.get() and landmarks is not None:
@@ -517,13 +650,59 @@ class CephalometricGUI:
                      '#FF00FF', '#FF00CC', '#FF0088', '#FF0044', '#FF0000',
                      '#00FF88', '#FFCC00', '#00CCFF', '#FF00CC']
             
+            # Track label positions to avoid overlaps
+            pred_label_positions = []
+            
             for i, lm in enumerate(landmarks):
                 x, y = int(lm[0] * scale), int(lm[1] * scale)
                 color = colors[i % len(colors)]
                 radius = 5
                 draw.ellipse([x-radius, y-radius, x+radius, y+radius],
                            fill=color, outline='white', width=1)
-                draw.text((x + 8, y - 5), str(i+1), fill=color)
+                
+                # Add landmark number and short name if labels enabled
+                if self.show_labels.get():
+                    # Show only landmark names (no numbers)
+                    short_name = LANDMARK_SHORT[i] if i < len(LANDMARK_SHORT) else f"L{i+1}"
+                    label = short_name
+                    
+                    # Position label centered above landmark
+                    label_width = len(label) * 6  # Estimate text width
+                    label_x = x - label_width // 2  # Center horizontally
+                    label_y = y - 15  # Move above the point
+                    
+                    # Check for overlaps with both GT and prediction labels
+                    all_positions = label_positions + pred_label_positions
+                    for pos_x, pos_y, label_width, label_height in all_positions:
+                        # Simple overlap detection
+                        if (abs(label_x - pos_x) < label_width and 
+                            abs(label_y - pos_y) < label_height):
+                            # Move label up to avoid overlap
+                            label_y = pos_y - label_height - 2
+                    
+                    # Estimate label size (rough approximation)
+                    label_height = 10
+                    pred_label_positions.append((label_x, label_y, label_width, label_height))
+                    
+                    draw.text((label_x, label_y), label, fill=color)
+                else:
+                    # Show only numbers when labels are disabled
+                    label = str(i+1)
+                    label_width = len(label) * 6
+                    label_x = x - label_width // 2
+                    label_y = y - 15
+                    
+                    # Check for overlaps with both GT and prediction labels
+                    all_positions = label_positions + pred_label_positions
+                    for pos_x, pos_y, label_width, label_height in all_positions:
+                        if (abs(label_x - pos_x) < label_width and 
+                            abs(label_y - pos_y) < label_height):
+                            label_y = pos_y - label_height - 2
+                    
+                    label_height = 10
+                    pred_label_positions.append((label_x, label_y, label_width, label_height))
+                    
+                    draw.text((label_x, label_y), label, fill=color)
         
         self.photo = ImageTk.PhotoImage(display_img)
         self.canvas.delete('all')
@@ -590,7 +769,7 @@ class CephalometricGUI:
             
             self.display_image_on_canvas(self.original_image, coords, confidences, self.gt_landmarks)
             self.update_landmark_list()
-            
+
             self.status_label.config(text="Analysis complete!")
             
         except Exception as e:
