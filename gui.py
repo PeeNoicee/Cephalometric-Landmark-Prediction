@@ -223,14 +223,14 @@ class CephalometricGUI:
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
         # Left panel - Controls
-        left_panel = tk.Frame(main_frame, bg='#3c3c3c', width=400)
+        left_panel = tk.Frame(main_frame, bg='#3c3c3c', width=350)
         left_panel.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
         left_panel.pack_propagate(False)
         
         # Title
         title_label = tk.Label(
             left_panel, 
-            text="Cephalometric\nLandmark Detection",
+            text="Cephalometric\nLandmark Prediction",
             font=('Segoe UI', 14, 'bold'),
             bg='#3c3c3c',
             fg='white'
