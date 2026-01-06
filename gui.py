@@ -1,5 +1,5 @@
 """
-GUI for Cephalometric Landmark DetecPrediction
+GUI for Cephalometric Landmark Detection 
 
 Features:
 - Load and analyze cephalometric X-ray images
@@ -46,6 +46,15 @@ LANDMARK_SHORT = [
     "U5", "U1A", "U1", "U6", "L1A", "Li", "Ls", "N'", "Pog'", "Sn"
 ]
 
+CVM_STAGE_INFO = [
+    ("CS1", "Initiation", "Accelerated childhood growth has not started."),
+    ("CS2", "Acceleration", "Onset of growth spurt; inferior borders of C2–C3 flatten."),
+    ("CS3", "Transition", "Peak mandibular growth; concavity at C2–C3 lower borders."),
+    ("CS4", "Deceleration", "Growth slowing; concavity extends to C4."),
+    ("CS5", "Maturation", "Minimal growth remains; vertebrae nearly rectangular."),
+    ("CS6", "Completion", "Growth complete; vertebrae taller than wide.")
+]
+
 
 class CephalometricGUI:
     def __init__(self, root):
@@ -71,6 +80,8 @@ class CephalometricGUI:
         self.model_checkpoint_meta = None
         self.current_pixel_spacing = self.config.DEFAULT_PIXEL_SPACING
         self.pixel_spacing_by_id = {}
+        self.cvm_probs = None
+        self.cvm_stage_idx = None
         
         # Dataset path - use relative path for portability
         self.dataset_path = os.path.join(os.path.dirname(__file__), "dataset")
@@ -351,6 +362,37 @@ class CephalometricGUI:
                                   bg='#3c3c3c', fg='#666666')
         self.gt_status.pack(anchor=tk.W, padx=5, pady=2)
         
+        # CVM detection panel
+        cvm_frame = tk.LabelFrame(left_panel, text="CVM Detection",
+                                  bg='#3c3c3c', fg='white', font=('Segoe UI', 10))
+        cvm_frame.pack(pady=5, fill=tk.X, padx=10)
+        self.cvm_stage_value = tk.Label(cvm_frame, text="Stage: --", font=('Segoe UI', 11, 'bold'),
+                                        bg='#3c3c3c', fg='#ffcc66', anchor='w')
+        self.cvm_stage_value.pack(fill=tk.X, padx=5, pady=(2, 0))
+        self.cvm_confidence_value = tk.Label(cvm_frame, text="Confidence: --",
+                                             font=('Segoe UI', 10), bg='#3c3c3c', fg='#cccccc', anchor='w')
+        self.cvm_confidence_value.pack(fill=tk.X, padx=5)
+        self.cvm_description_value = tk.Label(
+            cvm_frame,
+            text="Run Analyze to classify cervical vertebral maturation (CVM) stage.",
+            font=('Segoe UI', 9),
+            bg='#3c3c3c',
+            fg='#cccccc',
+            wraplength=280,
+            justify=tk.LEFT
+        )
+        self.cvm_description_value.pack(fill=tk.X, padx=5, pady=(0, 4))
+        tk.Button(
+            cvm_frame,
+            text="CVM Stage Legend",
+            font=('Segoe UI', 9),
+            bg='#5a5a5a',
+            fg='white',
+            cursor='hand2',
+            command=self.show_cvm_reference
+        ).pack(fill=tk.X, padx=5, pady=(0, 4))
+        self.cvm_frame = cvm_frame
+        
         # Status
         self.status_label = tk.Label(left_panel, text="Ready", font=('Segoe UI', 9),
                                      bg='#3c3c3c', fg='#aaaaaa')
@@ -358,6 +400,8 @@ class CephalometricGUI:
 
         if self.model_path is not None:
             self.status_label.config(text=f"Model: {os.path.basename(self.model_path)}")
+        
+        self.update_cvm_display()
         
         # Landmark list with scrollbars
         list_frame = tk.Frame(left_panel, bg='#3c3c3c')
