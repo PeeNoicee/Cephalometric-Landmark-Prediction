@@ -1,6 +1,6 @@
 """
 Training Script for Cephalometric Landmark Detection
-
+ 
 Features:
 - HRNet architecture (maintains high-resolution features)
 - Adaptive Wing Loss (precise landmark localization)

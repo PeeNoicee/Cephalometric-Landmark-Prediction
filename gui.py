@@ -387,6 +387,17 @@ class CephalometricGUI:
         v_scrollbar.config(command=self.landmark_listbox.yview)
         h_scrollbar.config(command=self.landmark_listbox.xview)
         
+        report_btn = tk.Button(
+            list_frame,
+            text="📄 Landmarks Report",
+            font=('Segoe UI', 9),
+            bg='#5a5a5a',
+            fg='white',
+            cursor='hand2',
+            command=self.show_landmark_report
+        )
+        report_btn.pack(fill=tk.X, padx=5, pady=(4, 0))
+        
         # Legend
         legend_frame = tk.Frame(left_panel, bg='#3c3c3c')
         legend_frame.pack(fill=tk.X, padx=10, pady=5)
@@ -602,10 +613,15 @@ class CephalometricGUI:
                     short_name = LANDMARK_SHORT[i] if i < len(LANDMARK_SHORT) else f"L{i+1}"
                     label = short_name
                     
-                    # Position label centered above landmark
+                    # Position label centered around landmark
                     label_width = len(label) * 6  # Estimate text width
                     label_x = x - label_width // 2  # Center horizontally
-                    label_y = y - 15  # Move above the point
+                    
+                    # For L5 (index 16) and L6 (index 18) place label below the point
+                    if i in (16, 18):
+                        label_y = y + 8
+                    else:
+                        label_y = y - 15  # Default above the point
                     
                     # Check for overlaps and adjust position
                     for pos_x, pos_y, label_width, label_height in label_positions:
@@ -666,10 +682,15 @@ class CephalometricGUI:
                     short_name = LANDMARK_SHORT[i] if i < len(LANDMARK_SHORT) else f"L{i+1}"
                     label = short_name
                     
-                    # Position label centered above landmark
+                    # Position label centered around landmark
                     label_width = len(label) * 6  # Estimate text width
                     label_x = x - label_width // 2  # Center horizontally
-                    label_y = y - 15  # Move above the point
+                    
+                    # For L5 (index 16) and L6 (index 18) place label below the point
+                    if i in (16, 18):
+                        label_y = y + 8
+                    else:
+                        label_y = y - 15  # Default above the point
                     
                     # Check for overlaps with both GT and prediction labels
                     all_positions = label_positions + pred_label_positions
@@ -832,6 +853,46 @@ class CephalometricGUI:
             
             self.landmark_listbox.insert(tk.END, text)
             self.landmark_listbox.itemconfig(i, fg=color)
+
+    def show_landmark_report(self):
+        """Display a detailed report of Pred vs GT landmarks"""
+        if self.landmarks is None:
+            messagebox.showinfo("Landmark Report", "Run an analysis first.")
+            return
+        
+        if self.gt_landmarks is None:
+            messagebox.showinfo("Landmark Report", "Ground truth landmarks are required for this report.")
+            return
+        
+        pixel_spacing = float(self.current_pixel_spacing)
+        report_lines = []
+        header = f"{'No.':>3} {'Name':<5} {'Pred (x,y)':>14} {'GT (x,y)':>14} {'Error(mm)':>10} Status"
+        report_lines.append(header)
+        report_lines.append("-" * len(header))
+        
+        for i, (pred, gt) in enumerate(zip(self.landmarks, self.gt_landmarks)):
+            short_name = LANDMARK_SHORT[i] if i < len(LANDMARK_SHORT) else f"L{i+1}"
+            err = np.sqrt((pred[0]-gt[0])**2 + (pred[1]-gt[1])**2) * pixel_spacing
+            status = "✓ within 2mm" if err <= 2 else ("~ within 4mm" if err <= 4 else "✗ >4mm")
+            report_lines.append(
+                f"{i+1:>3} {short_name:<5} ({pred[0]:6.1f},{pred[1]:6.1f}) "
+                f"({gt[0]:6.1f},{gt[1]:6.1f}) {err:10.2f} {status}"
+            )
+        
+        report_text = "\n".join(report_lines)
+        
+        report_window = tk.Toplevel(self.root)
+        report_window.title("Landmarks (Pred vs GT) Report")
+        report_window.geometry("800x500")
+        report_window.configure(bg='#2b2b2b')
+        
+        text_widget = tk.Text(report_window, font=('Consolas', 10), bg='#1e1e1e', fg='#e0e0e0')
+        text_widget.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        text_widget.insert(tk.END, report_text)
+        text_widget.config(state=tk.DISABLED)
+        
+        close_btn = tk.Button(report_window, text="Close", command=report_window.destroy, bg='#5a5a5a', fg='white')
+        close_btn.pack(pady=(0, 10))
 
 
 def main():

@@ -30,3 +30,8 @@ xrays/
 # OS
 .DS_Store
 Thumbs.db
+
+# Build
+dist/
+release/
+
