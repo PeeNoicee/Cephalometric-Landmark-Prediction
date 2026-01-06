@@ -6,7 +6,7 @@ Features:
 - Adaptive Wing Loss (precise landmark localization)
 - Per-image pixel spacing (proper mm conversion)
 - Cosine annealing with warm restarts
-- Multi-task learning (landmarks + CVM staging)
+- Multi-task learning (landmarks)
 
 Usage:
     python train.py
