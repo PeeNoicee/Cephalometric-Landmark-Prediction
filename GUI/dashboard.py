@@ -45,6 +45,7 @@ DEFAULT_MODEL_PATH = get_resource_path("checkpoints", "best_model.pth")
 from src.models.hrnet import HRNet
 from src.utils.metrics import extract_coordinates_from_heatmaps, soft_argmax_2d
 from src.config.config import TrainConfig
+from src.utils.dicom_handler import is_dicom_file, load_dicom_as_pil, extract_dicom_pixel_spacing, PYDICOM_AVAILABLE
 
 # Landmark names in JSON file order (as used by dataset.py during training)
 # This is the ACTUAL order from the annotation files
@@ -644,16 +645,26 @@ class CephalometricGUI:
         def run_analysis():
             try:
                 # Convert image to tensor and run prediction
-                image_tensor = self._preprocess_image(self.original_image)
+                image_tensor, orig_size = self._preprocess_image(self.original_image)
                 
                 with torch.no_grad():
-                    prediction = self.model(image_tensor)
+                    pred_heatmaps, cvm_logits = self.model(image_tensor)
                 
-                # Extract coordinates
+                # Extract coordinates from heatmaps
                 if self.coord_method.get() == 'soft_argmax':
-                    landmarks = soft_argmax_2d(prediction)
+                    coords = soft_argmax_2d(pred_heatmaps, temperature=0.05)
                 else:
-                    landmarks = extract_coordinates_from_heatmaps(prediction)
+                    coords = extract_coordinates_from_heatmaps(pred_heatmaps)
+                
+                # Scale heatmap coordinates back to original image size
+                scale_x = orig_size[0] / self.config.HEATMAP_SIZE[1]
+                scale_y = orig_size[1] / self.config.HEATMAP_SIZE[0]
+                
+                coords = coords.cpu().numpy()[0]
+                coords[:, 0] *= scale_x
+                coords[:, 1] *= scale_y
+                
+                landmarks = torch.from_numpy(coords)
                 
                 # Update UI with results
                 self.root.after(0, lambda: self._on_analysis_complete(landmarks))
@@ -697,27 +708,39 @@ class CephalometricGUI:
         messagebox.showerror("Analysis Error", f"Failed to analyze image:\n{error_msg}")
     
     def _preprocess_image(self, image):
-        """Preprocess image for model input"""
-        # Convert PIL to numpy
-        img_array = np.array(image)
+        """Preprocess image for model input (must match training pipeline exactly)
         
-        # Convert to RGB if grayscale
-        if len(img_array.shape) == 2:
-            img_array = np.stack([img_array] * 3, axis=-1)
-        elif img_array.shape[2] == 4:
-            img_array = img_array[:, :, :3]
+        Training pipeline: grayscale -> CLAHE -> resize 864x768 -> normalize [0,1] -> (1,1,H,W)
         
-        # Convert to tensor and normalize
-        img_tensor = torch.from_numpy(img_array).float().permute(2, 0, 1) / 255.0
+        Returns:
+            img_tensor: (1, 1, H, W) float32 tensor on self.device
+            orig_size: (orig_w, orig_h) tuple for scaling coordinates back
+        """
+        img_np = np.array(image)
         
-        # Add batch dimension
-        img_tensor = img_tensor.unsqueeze(0)
+        # Convert to grayscale (model expects 1 channel)
+        if len(img_np.shape) == 3:
+            img_np = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
         
-        # Move to device
+        orig_h, orig_w = img_np.shape[:2]
+        
+        # Apply CLAHE (same as training: clipLimit=2.0, tileGridSize=(8,8))
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        img_np = clahe.apply(img_np)
+        
+        # Resize to model input size (W, H) = (768, 864)
+        img_resized = cv2.resize(img_np, (self.config.INPUT_SIZE[1], self.config.INPUT_SIZE[0]))
+        
+        # Normalize to [0, 1]
+        img_normalized = img_resized.astype(np.float32) / 255.0
+        
+        # Create (1, 1, H, W) tensor
+        img_tensor = torch.from_numpy(img_normalized).unsqueeze(0).unsqueeze(0)
+        
         if hasattr(self, 'device'):
             img_tensor = img_tensor.to(self.device)
         
-        return img_tensor
+        return img_tensor, (orig_w, orig_h)
 
     def show_export_dialog(self):
         """Show export options dialog"""
@@ -2528,8 +2551,14 @@ class CephalometricGUI:
         self.pan_offset_y = max(-max_offset_y, min(max_offset_y, self.pan_offset_y))
     
     def upload_image(self):
-        """Upload PNG image file"""
-        filetypes = [("PNG files", "*.png"), ("All files", "*.*")]
+        """Upload PNG or DICOM image file"""
+        filetypes = [
+            ("Cephalometric images", "*.png *.dcm *.dicom"),
+            ("PNG files", "*.png"),
+            ("DICOM files", "*.dcm *.dicom"),
+            ("All image files", "*.jpg *.jpeg *.png *.bmp *.tif *.tiff *.dcm *.dicom"),
+            ("All files", "*.*"),
+        ]
         filepath = filedialog.askopenfilename(title="Select Cephalometric Image", filetypes=filetypes)
         
         if filepath:
@@ -2537,7 +2566,18 @@ class CephalometricGUI:
             self._reset_landmark_state()
             self.image_path = filepath
             image_id = os.path.splitext(os.path.basename(filepath))[0]
-            self._set_current_pixel_spacing(image_id)
+
+            # For DICOM files, try to extract pixel spacing from metadata
+            if is_dicom_file(filepath):
+                dicom_spacing = extract_dicom_pixel_spacing(filepath)
+                if dicom_spacing is not None:
+                    self.current_pixel_spacing = dicom_spacing
+                    print(f"DICOM pixel spacing: {dicom_spacing:.4f} mm/px")
+                else:
+                    self._set_current_pixel_spacing(image_id)
+            else:
+                self._set_current_pixel_spacing(image_id)
+
             self.load_and_display_image(filepath)
             self.analyze_btn.config(state=tk.NORMAL)
             self.gt_landmarks = None
@@ -2627,11 +2667,21 @@ class CephalometricGUI:
         self.gt_status.config(text="GT: Not found", fg='#ff6666')
         
     def load_and_display_image(self, filepath):
-        """Load and display the image"""
+        """Load and display the image (supports PNG, JPEG, DICOM, etc.)"""
         try:
-            self.original_image = Image.open(filepath)
-            if self.original_image.mode != 'RGB':
-                self.original_image = self.original_image.convert('RGB')
+            if is_dicom_file(filepath):
+                if not PYDICOM_AVAILABLE:
+                    messagebox.showerror(
+                        "Missing Dependency",
+                        "pydicom is required to load DICOM files.\n"
+                        "Install it with: pip install pydicom"
+                    )
+                    return
+                self.original_image = load_dicom_as_pil(filepath)
+            else:
+                self.original_image = Image.open(filepath)
+                if self.original_image.mode != 'RGB':
+                    self.original_image = self.original_image.convert('RGB')
             self._display_image_size = self.original_image.size
             self.display_image_on_canvas(self.original_image)
         except Exception as e:
