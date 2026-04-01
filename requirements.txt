@@ -27,5 +27,10 @@ tensorboard>=2.13.0
 # Model Architecture
 segmentation-models-pytorch>=0.3.3
 
+# Web API Server
+fastapi>=0.100.0
+uvicorn>=0.23.0
+python-multipart>=0.0.6
+
 # Optional: GPU monitoring
 pynvml>=11.0.0
