@@ -11,8 +11,9 @@ import { ANALYSIS_DEFINITIONS } from "./constants";
  * @param {number}  opts.pixelSpacing   - mm per pixel
  * @param {string}  opts.fileName       - original file name
  * @param {string}  opts.analysisType   - currently selected analysis
+ * @param {string}  opts.diagnosis       - AI-generated diagnosis text (optional)
  */
-export function exportPdf({ canvasDataURL, landmarks, pixelSpacing, fileName, analysisType }) {
+export function exportPdf({ canvasDataURL, landmarks, pixelSpacing, fileName, analysisType, diagnosis }) {
   const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
   const pageW = pdf.internal.pageSize.getWidth();   // 210
   const pageH = pdf.internal.pageSize.getHeight();  // 297
@@ -149,6 +150,116 @@ export function exportPdf({ canvasDataURL, landmarks, pixelSpacing, fileName, an
     sectionHeader(`${type} Analysis`);
     drawTable(results);
   }
+
+  // ── AI Diagnosis ──
+  if (diagnosis) {
+    sectionHeader("AI Clinical Diagnosis");
+    renderMarkdown(diagnosis);
+  }
+
+  /**
+   * Render markdown-formatted diagnosis text into the PDF with proper formatting.
+   */
+  function renderMarkdown(md) {
+    const textX = margin + 3;
+    const bulletX = margin + 6;
+    const textW = contentW - 8;
+    // Replace emoji warning symbol with text for PDF compatibility
+    const safeMd = md.replace(/\u26a0/g, "[WARNING]");
+    const rawLines = safeMd.split("\n");
+
+    for (const raw of rawLines) {
+      const trimmed = raw.trim();
+      if (!trimmed) { y += 2; continue; }
+
+      // Page break guard
+      if (y > pageH - 18) { pdf.addPage(); y = margin; }
+
+      // ### Heading
+      if (/^#{1,3}\s/.test(trimmed)) {
+        const headingText = trimmed.replace(/^#{1,3}\s+/, "");
+        y += 2;
+        pdf.setFont("helvetica", "bold");
+        pdf.setFontSize(9.5);
+        pdf.setTextColor(0, 140, 135);
+        pdf.text(stripBold(headingText), textX, y + 3);
+        y += 6;
+        continue;
+      }
+
+      // Numbered list: 1. **text**: description
+      const numMatch = trimmed.match(/^(\d+)\.\s+(.*)/);
+      if (numMatch) {
+        renderInlineFormatted(numMatch[2], bulletX, textW - 4, true, numMatch[1] + ". ");
+        continue;
+      }
+
+      // Bullet: - text
+      if (/^[-*]\s/.test(trimmed)) {
+        const bulletText = trimmed.replace(/^[-*]\s+/, "");
+        renderInlineFormatted(bulletText, bulletX, textW - 4, true);
+        continue;
+      }
+
+      // Normal paragraph
+      renderInlineFormatted(trimmed, textX, textW, false);
+    }
+    y += 3;
+  }
+
+  /**
+   * Render a line of text that may contain **bold** segments.
+   * Handles word-wrapping within the available width.
+   */
+  function renderInlineFormatted(text, startX, maxW, isBullet, bulletPrefix) {
+    pdf.setFontSize(8.5);
+    const lineH = 4;
+
+    // Split into segments: alternating normal / bold
+    const parts = [];
+    const regex = /\*\*(.+?)\*\*/g;
+    let last = 0;
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+      if (match.index > last) parts.push({ t: text.slice(last, match.index), bold: false });
+      parts.push({ t: match[1], bold: true });
+      last = regex.lastIndex;
+    }
+    if (last < text.length) parts.push({ t: text.slice(last), bold: false });
+
+    // Build word list with formatting
+    const words = [];
+    if (isBullet && bulletPrefix) {
+      words.push({ w: bulletPrefix, bold: true });
+    } else if (isBullet) {
+      words.push({ w: "\u2022 ", bold: false });
+    }
+    for (const part of parts) {
+      for (const w of part.t.split(/\s+/).filter(Boolean)) {
+        words.push({ w, bold: part.bold });
+      }
+    }
+
+    // Word-wrap and render
+    let curX = startX;
+    let firstLine = true;
+    for (let i = 0; i < words.length; i++) {
+      const word = words[i];
+      pdf.setFont("helvetica", word.bold ? "bold" : "normal");
+      pdf.setTextColor(word.bold ? 20 : 50, word.bold ? 30 : 55, word.bold ? 50 : 75);
+      const ww = pdf.getTextWidth(word.w + " ");
+      if (curX + ww > startX + maxW && curX > startX + 2) {
+        y += lineH;
+        if (y > pageH - 15) { pdf.addPage(); y = margin; }
+        curX = startX;
+      }
+      pdf.text(word.w, curX, y + 3);
+      curX += ww;
+    }
+    y += lineH;
+  }
+
+  function stripBold(s) { return s.replace(/\*\*/g, ""); }
 
   // ── Footer ──
   const totalPages = pdf.internal.getNumberOfPages();
