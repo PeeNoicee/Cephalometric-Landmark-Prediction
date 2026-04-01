@@ -255,6 +255,25 @@ async def predict(file: UploadFile = File(...)):
 
 
 # ---------------------------------------------------------------------------
+# RAG Diagnosis endpoint
+# ---------------------------------------------------------------------------
+@app.post("/api/diagnose")
+async def diagnose(payload: dict):
+    """Generate a clinical diagnosis from cephalometric measurements using RAG + Qwen 2.5 14B."""
+    try:
+        from rag.retriever import generate_diagnosis
+        measurements = payload.get("measurements", [])
+        if not measurements:
+            raise HTTPException(status_code=400, detail="No measurements provided")
+        diagnosis = generate_diagnosis(measurements)
+        return {"diagnosis": diagnosis}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Diagnosis generation failed: {str(e)}")
+
+
+# ---------------------------------------------------------------------------
 # Serve frontend (production)
 # ---------------------------------------------------------------------------
 FRONTEND_DIST = os.path.join(PROJECT_ROOT, "web", "dist")
