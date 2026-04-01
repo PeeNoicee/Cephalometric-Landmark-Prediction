@@ -70,10 +70,10 @@ export const ANALYSIS_DEFINITIONS = {
     { name: "Facial Depth Angle", type: "angle_lines", line1: ["Po", "Or"], line2: ["N", "Pog"], units: "\u00B0", normal: "90\u00B0 \u00B1 3\u00B0", range: [87, 93] },
   ],
   McNamara: [
-    { name: "Maxillary Length", type: "distance", points: ["Co", "A"], units: "mm", normal: "52 \u00B1 3 mm", range: [49, 55] },
-    { name: "Mandibular Length", type: "distance", points: ["Co", "Gn"], units: "mm", normal: "65 \u00B1 4 mm", range: [61, 69] },
-    { name: "Anterior Facial Height", type: "distance", points: ["N", "Me"], units: "mm", normal: "110 \u00B1 4 mm", range: [106, 114] },
-    { name: "Facial Convexity", type: "distance", points: ["A", "N'"], units: "mm", normal: "2 \u00B1 2 mm", range: [0, 4] },
+    { name: "Maxillary Length", type: "distance", points: ["Co", "A"], units: "mm", normal: "91 \u00B1 6 mm", range: [85, 97] },
+    { name: "Mandibular Length", type: "distance", points: ["Co", "Gn"], units: "mm", normal: "120 \u00B1 7 mm", range: [113, 127] },
+    { name: "Anterior Facial Height", type: "distance", points: ["N", "Me"], units: "mm", normal: "120 \u00B1 5 mm", range: [115, 125] },
+    { name: "Facial Convexity", type: "point_to_line", point: "A", line: ["N", "Pog"], units: "mm", normal: "2 \u00B1 2 mm", range: [0, 4] },
   ],
 };
 

@@ -10,6 +10,15 @@ function dist(a, b) {
   return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
 }
 
+function pointToLineDist(point, lineA, lineB) {
+  const dx = lineB.x - lineA.x;
+  const dy = lineB.y - lineA.y;
+  const len = Math.sqrt(dx * dx + dy * dy);
+  if (len === 0) return 0;
+  // Signed distance: positive if point is anterior (left of line in standard ceph orientation)
+  return ((point.x - lineA.x) * dy - (point.y - lineA.y) * dx) / len;
+}
+
 function angleDeg(a, vertex, b) {
   const v1 = { x: a.x - vertex.x, y: a.y - vertex.y };
   const v2 = { x: b.x - vertex.x, y: b.y - vertex.y };
@@ -50,6 +59,10 @@ export function computeAnalysis(analysisType, landmarks, pixelSpacing = DEFAULT_
       } else if (def.type === "distance") {
         const [a, b] = def.points.map((s) => getLandmark(landmarks, s));
         if (a && b) value = dist(a, b) * pixelSpacing;
+      } else if (def.type === "point_to_line") {
+        const pt = getLandmark(landmarks, def.point);
+        const [lA, lB] = def.line.map((s) => getLandmark(landmarks, s));
+        if (pt && lA && lB) value = Math.abs(pointToLineDist(pt, lA, lB)) * pixelSpacing;
       } else if (def.type === "ratio") {
         const [[a1, a2], [b1, b2]] = def.segments.map((seg) =>
           seg.map((s) => getLandmark(landmarks, s))
