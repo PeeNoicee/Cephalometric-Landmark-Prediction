@@ -1,1 +1,40 @@
 /* Custom styles - TailwindCSS handles most styling */
+
+/* Diagnosis markdown rendering */
+.diagnosis-markdown h1,
+.diagnosis-markdown h2,
+.diagnosis-markdown h3 {
+  font-weight: 700;
+  color: rgb(196, 181, 253); /* violet-300 */
+  margin-top: 0.75rem;
+  margin-bottom: 0.35rem;
+}
+.diagnosis-markdown h1 { font-size: 0.85rem; }
+.diagnosis-markdown h2 { font-size: 0.8rem; }
+.diagnosis-markdown h3 { font-size: 0.75rem; }
+
+.diagnosis-markdown p {
+  margin-bottom: 0.5rem;
+}
+
+.diagnosis-markdown strong {
+  color: rgb(226, 232, 240); /* slate-200 */
+  font-weight: 600;
+}
+
+.diagnosis-markdown ul,
+.diagnosis-markdown ol {
+  padding-left: 1.1rem;
+  margin-bottom: 0.5rem;
+}
+
+.diagnosis-markdown ul { list-style-type: disc; }
+.diagnosis-markdown ol { list-style-type: decimal; }
+
+.diagnosis-markdown li {
+  margin-bottom: 0.2rem;
+}
+
+.diagnosis-markdown li::marker {
+  color: rgb(139, 92, 246); /* violet-500 */
+}

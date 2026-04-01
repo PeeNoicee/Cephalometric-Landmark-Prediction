@@ -16,3 +16,16 @@ export async function checkHealth() {
   if (!res.ok) throw new Error("Server unreachable");
   return res.json();
 }
+
+export async function generateDiagnosis(measurements) {
+  const res = await fetch(`${BASE}/api/diagnose`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ measurements }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || "Diagnosis generation failed");
+  }
+  return res.json();
+}

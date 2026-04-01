@@ -1,13 +1,15 @@
 import { useState, useCallback, useRef } from "react";
 import {
   Upload, Search, FileText, Eye, EyeOff, Tag, Tags,
-  PenLine, PenOff, Loader2, Server, ChevronDown, Move, RotateCcw,
+  PenLine, PenOff, Loader2, Server, ChevronDown, Move, RotateCcw, BrainCircuit,
 } from "lucide-react";
 import ImageCanvas from "./components/ImageCanvas";
 import AnalysisPanel from "./components/AnalysisPanel";
-import { predictLandmarks } from "./api";
-import { DEFAULT_PIXEL_SPACING } from "./constants";
+import { predictLandmarks, generateDiagnosis } from "./api";
+import { computeAnalysis } from "./analysis";
+import { DEFAULT_PIXEL_SPACING, ANALYSIS_DEFINITIONS } from "./constants";
 import { exportPdf } from "./exportPdf";
+import ReactMarkdown from "react-markdown";
 import "./App.css";
 
 const ANALYSIS_TYPES = ["Steiner", "Ricketts", "McNamara"];
@@ -28,6 +30,8 @@ function App() {
   const [highlightedLandmark, setHighlightedLandmark] = useState(null);
   const [editMode, setEditMode] = useState(false);
   const [editCount, setEditCount] = useState(0);
+  const [diagnosis, setDiagnosis] = useState(null);
+  const [diagnosisLoading, setDiagnosisLoading] = useState(false);
 
   const fileRef = useRef(null);
   const canvasRef = useRef(null);
@@ -39,6 +43,7 @@ function App() {
     setError(null);
     setInferenceTime(null);
     setPixelSpacing(DEFAULT_PIXEL_SPACING);
+    setDiagnosis(null);
     const url = URL.createObjectURL(f);
     setImageUrl(url);
   }, []);
@@ -107,6 +112,27 @@ function App() {
     }
   }, [file]);
 
+  const handleGenerateDiagnosis = useCallback(async () => {
+    if (!landmarks) return;
+    setDiagnosis(null);
+    setDiagnosisLoading(true);
+    setError(null);
+    try {
+      // Compute all measurements across all analysis types
+      const allMeasurements = [];
+      for (const type of Object.keys(ANALYSIS_DEFINITIONS)) {
+        const results = computeAnalysis(type, landmarks, pixelSpacing);
+        allMeasurements.push(...results.map((r) => ({ ...r, analysisType: type })));
+      }
+      const data = await generateDiagnosis(allMeasurements);
+      setDiagnosis(data.diagnosis);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setDiagnosisLoading(false);
+    }
+  }, [landmarks, pixelSpacing]);
+
   const handleExportPDF = useCallback(() => {
     if (!landmarks) return;
     const canvasDataURL = canvasRef.current?.getCanvasDataURL();
@@ -116,8 +142,9 @@ function App() {
       pixelSpacing,
       fileName: file?.name || "unknown",
       analysisType,
+      diagnosis,
     });
-  }, [landmarks, pixelSpacing, file, analysisType]);
+  }, [landmarks, pixelSpacing, file, analysisType, diagnosis]);
 
   return (
     <div className="h-screen flex flex-col bg-slate-950 text-slate-100 overflow-hidden">
@@ -181,6 +208,20 @@ function App() {
               )}
               {loading ? "Analyzing..." : "Analyze Image"}
             </button>
+            {landmarks && (
+              <button
+                onClick={handleGenerateDiagnosis}
+                disabled={diagnosisLoading}
+                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium transition-colors cursor-pointer"
+              >
+                {diagnosisLoading ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <BrainCircuit className="w-4 h-4" />
+                )}
+                {diagnosisLoading ? "Generating..." : diagnosis ? "Regenerate Diagnosis" : "Generate Diagnosis"}
+              </button>
+            )}
             {landmarks && (
               <button
                 onClick={handleExportPDF}
@@ -332,6 +373,23 @@ function App() {
               landmarks={landmarks}
               pixelSpacing={pixelSpacing}
             />
+            {diagnosis && (
+              <div className="mt-4 p-3 rounded-lg bg-violet-500/10 border border-violet-500/20">
+                <div className="flex items-center gap-2 mb-2">
+                  <BrainCircuit className="w-4 h-4 text-violet-400" />
+                  <h3 className="text-xs font-semibold text-violet-300 uppercase tracking-wider">AI Diagnosis</h3>
+                </div>
+                <div className="diagnosis-markdown text-xs text-slate-300 leading-relaxed">
+                  <ReactMarkdown>{diagnosis}</ReactMarkdown>
+                </div>
+              </div>
+            )}
+            {diagnosisLoading && (
+              <div className="mt-4 flex items-center gap-2 text-xs text-violet-400">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                Generating diagnosis...
+              </div>
+            )}
           </div>
         </aside>
       </div>
