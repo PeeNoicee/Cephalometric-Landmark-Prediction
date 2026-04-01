@@ -7,6 +7,7 @@ import ImageCanvas from "./components/ImageCanvas";
 import AnalysisPanel from "./components/AnalysisPanel";
 import { predictLandmarks } from "./api";
 import { DEFAULT_PIXEL_SPACING } from "./constants";
+import { exportPdf } from "./exportPdf";
 import "./App.css";
 
 const ANALYSIS_TYPES = ["Steiner", "Ricketts", "McNamara"];
@@ -29,6 +30,7 @@ function App() {
   const [editCount, setEditCount] = useState(0);
 
   const fileRef = useRef(null);
+  const canvasRef = useRef(null);
 
   const handleFile = useCallback((f) => {
     if (!f) return;
@@ -105,18 +107,17 @@ function App() {
     }
   }, [file]);
 
-  const handleExportJSON = useCallback(() => {
+  const handleExportPDF = useCallback(() => {
     if (!landmarks) return;
-    const blob = new Blob([JSON.stringify({ landmarks, analysisType, pixelSpacing }, null, 2)], {
-      type: "application/json",
+    const canvasDataURL = canvasRef.current?.getCanvasDataURL();
+    exportPdf({
+      canvasDataURL,
+      landmarks,
+      pixelSpacing,
+      fileName: file?.name || "unknown",
+      analysisType,
     });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `cephalometric_report_${Date.now()}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }, [landmarks, analysisType, pixelSpacing]);
+  }, [landmarks, pixelSpacing, file, analysisType]);
 
   return (
     <div className="h-screen flex flex-col bg-slate-950 text-slate-100 overflow-hidden">
@@ -182,11 +183,11 @@ function App() {
             </button>
             {landmarks && (
               <button
-                onClick={handleExportJSON}
+                onClick={handleExportPDF}
                 className="w-full flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-sm font-medium transition-colors cursor-pointer"
               >
                 <FileText className="w-4 h-4" />
-                Export JSON
+                Save as PDF
               </button>
             )}
           </div>
@@ -299,6 +300,7 @@ function App() {
             </div>
           )}
           <ImageCanvas
+            ref={canvasRef}
             imageUrl={imageUrl}
             landmarks={landmarks}
             analysisType={analysisType}

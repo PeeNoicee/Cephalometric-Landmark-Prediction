@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, useState } from "react";
+import { useRef, useEffect, useCallback, useState, forwardRef, useImperativeHandle } from "react";
 import { LANDMARK_SHORT, LANDMARK_NAMES, LANDMARK_COLORS, LANDMARK_INDEX, TRACING_SEGMENTS } from "../constants";
 
 const TRACING_LINE_COLORS = [
@@ -11,7 +11,7 @@ const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 8;
 const ZOOM_STEP = 1.15;
 
-export default function ImageCanvas({
+const ImageCanvas = forwardRef(function ImageCanvas({
   imageUrl,
   landmarks,
   analysisType,
@@ -22,11 +22,16 @@ export default function ImageCanvas({
   editMode = false,
   onLandmarkMove,
   onHighlight,
-}) {
+}, ref) {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
   const imgRef = useRef(null);
   const [imgLoaded, setImgLoaded] = useState(false);
+
+  // Expose canvas data URL to parent for PDF export
+  useImperativeHandle(ref, () => ({
+    getCanvasDataURL: () => canvasRef.current?.toDataURL("image/png"),
+  }));
 
   // Zoom & pan state (refs to avoid re-render on every frame)
   // panRef stores the absolute top-left position of the image on the canvas
@@ -52,7 +57,13 @@ export default function ImageCanvas({
     setImgLoaded(false);
     if (!imageUrl) return;
     const img = new Image();
-    img.onload = () => { imgRef.current = img; setImgLoaded(true); };
+    img.onload = () => {
+      imgRef.current = img;
+      setImgLoaded(true);
+      // Force redraw via ref — covers the case where React batches
+      // setImgLoaded(false)+setImgLoaded(true) into a no-op
+      requestAnimationFrame(() => drawRef.current?.());
+    };
     img.src = imageUrl;
   }, [imageUrl]);
 
@@ -369,4 +380,6 @@ export default function ImageCanvas({
       )}
     </div>
   );
-}
+});
+
+export default ImageCanvas;
