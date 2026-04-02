@@ -31,6 +31,79 @@ const ImageCanvas = forwardRef(function ImageCanvas({
   // Expose canvas data URL to parent for PDF export
   useImperativeHandle(ref, () => ({
     getCanvasDataURL: () => canvasRef.current?.toDataURL("image/png"),
+    getOriginalCanvasDataURL: () => {
+      // Create a temporary canvas to draw the image at original size without zoom/pan
+      const canvas = canvasRef.current;
+      const img = imgRef.current;
+      if (!canvas || !img) return null;
+
+      const tempCanvas = document.createElement("canvas");
+      const tempCtx = tempCanvas.getContext("2d");
+      
+      // Set canvas to original image dimensions
+      tempCanvas.width = img.width;
+      tempCanvas.height = img.height;
+
+      // Draw the image at original size (no transformations)
+      tempCtx.drawImage(img, 0, 0, img.width, img.height);
+
+      // Draw landmarks and tracing at original coordinates
+      if (landmarks && landmarks.length > 0) {
+        // Tracing lines
+        if (showTracing && analysisType) {
+          const segs = TRACING_SEGMENTS[analysisType] || [];
+          segs.forEach(([label, from, to], i) => {
+            const fromIdx = LANDMARK_INDEX[from];
+            const toIdx = LANDMARK_INDEX[to];
+            if (fromIdx === undefined || toIdx === undefined) return;
+            const a = landmarks[fromIdx];
+            const b = landmarks[toIdx];
+            if (!a || !b) return;
+
+            tempCtx.beginPath();
+            tempCtx.strokeStyle = TRACING_LINE_COLORS[i % TRACING_LINE_COLORS.length];
+            tempCtx.lineWidth = 1.5;
+            tempCtx.setLineDash([6, 4]);
+            tempCtx.moveTo(a.x, a.y);
+            tempCtx.lineTo(b.x, b.y);
+            tempCtx.stroke();
+            tempCtx.setLineDash([]);
+          });
+        }
+
+        // Landmarks
+        if (showLandmarks) {
+          landmarks.forEach((lm, i) => {
+            const color = LANDMARK_COLORS[i % LANDMARK_COLORS.length];
+            const isHighlighted = highlightedLandmark === i;
+            const radius = isHighlighted ? 6 : 4;
+
+            if (isHighlighted) {
+              tempCtx.fillStyle = color + "40"; // 25% opacity
+              tempCtx.beginPath();
+              tempCtx.arc(lm.x, lm.y, radius + 2, 0, 2 * Math.PI);
+              tempCtx.fill();
+            }
+
+            tempCtx.fillStyle = color;
+            tempCtx.beginPath();
+            tempCtx.arc(lm.x, lm.y, radius, 0, 2 * Math.PI);
+            tempCtx.fill();
+
+            // Labels
+            if (showLabels) {
+              tempCtx.fillStyle = "#ffffff";
+              tempCtx.font = "12px sans-serif";
+              tempCtx.textAlign = "center";
+              tempCtx.textBaseline = "bottom";
+              tempCtx.fillText(LANDMARK_SHORT[i] || `P${i + 1}`, lm.x, lm.y - 6);
+            }
+          });
+        }
+      }
+
+      return tempCanvas.toDataURL("image/png");
+    },
   }));
 
   // Zoom & pan state (refs to avoid re-render on every frame)

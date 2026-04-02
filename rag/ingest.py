@@ -1,18 +1,19 @@
 """
-Ingest textbook PDFs into a ChromaDB vector store for RAG.
+Ingest textbook PDFs and DOCX files into a ChromaDB vector store for RAG.
 
 Usage:
     python -m rag.ingest
 
-Reads all PDFs from the textbooks/ directory, extracts text, chunks by
-section headings, embeds with nomic-embed-text via Ollama, and stores
-in a persistent ChromaDB collection at rag/chroma_db/.
+Reads all PDFs and DOCX files from the textbooks/ directory, extracts text,
+chunks by section headings, embeds with nomic-embed-text via Ollama, and
+stores in a persistent ChromaDB collection at rag/chroma_db/.
 """
 import os
 import re
 import fitz  # PyMuPDF
 import pytesseract
 from PIL import Image as PILImage
+from docx import Document as DocxDocument
 import chromadb
 import ollama
 
@@ -44,6 +45,29 @@ def extract_text_from_pdf(pdf_path: str) -> str:
             print(f"      [OCR] page {page_num + 1}: {len(ocr_text.strip())} chars")
     doc.close()
     return "\n\n".join(pages)
+
+
+# ---------------------------------------------------------------------------
+# DOCX text extraction
+# ---------------------------------------------------------------------------
+def extract_text_from_docx(docx_path: str) -> str:
+    """Extract text from a DOCX file, including table content."""
+    doc = DocxDocument(docx_path)
+    parts = []
+
+    for para in doc.paragraphs:
+        text = para.text.strip()
+        if text:
+            parts.append(text)
+
+    for table in doc.tables:
+        rows = []
+        for row in table.rows:
+            cells = [cell.text.strip() for cell in row.cells]
+            rows.append(" | ".join(cells))
+        parts.append("\n".join(rows))
+
+    return "\n\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -137,19 +161,24 @@ def embed_text(text: str) -> list[float]:
 def ingest_all():
     """Main ingestion pipeline: extract → chunk → embed → store."""
     pdf_files = [f for f in os.listdir(TEXTBOOKS_DIR) if f.lower().endswith(".pdf")]
-    if not pdf_files:
-        print(f"No PDF files found in {TEXTBOOKS_DIR}")
+    docx_files = [f for f in os.listdir(TEXTBOOKS_DIR) if f.lower().endswith(".docx")]
+    all_files = pdf_files + docx_files
+    if not all_files:
+        print(f"No PDF or DOCX files found in {TEXTBOOKS_DIR}")
         return
 
-    print(f"Found {len(pdf_files)} textbook(s): {pdf_files}")
+    print(f"Found {len(all_files)} textbook(s): {all_files}")
 
     # Collect all chunks
     all_chunks = []
-    for pdf_name in pdf_files:
-        pdf_path = os.path.join(TEXTBOOKS_DIR, pdf_name)
-        source = os.path.splitext(pdf_name)[0]
-        print(f"  Extracting: {pdf_name} ...")
-        text = extract_text_from_pdf(pdf_path)
+    for fname in all_files:
+        fpath = os.path.join(TEXTBOOKS_DIR, fname)
+        source = os.path.splitext(fname)[0]
+        print(f"  Extracting: {fname} ...")
+        if fname.lower().endswith(".pdf"):
+            text = extract_text_from_pdf(fpath)
+        else:
+            text = extract_text_from_docx(fpath)
         print(f"    -> {len(text)} chars extracted")
         chunks = chunk_text(text, source)
         print(f"    -> {len(chunks)} chunks")

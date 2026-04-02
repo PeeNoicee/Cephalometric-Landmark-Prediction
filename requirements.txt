@@ -21,8 +21,10 @@ pydantic>=2.5.0
 # DICOM Support
 pydicom>=2.4.0
 
-# PDF Processing and OCR
+# PDF/DOCX Processing and OCR
 PyPDF2>=3.0.0
+PyMuPDF>=1.23.0
+python-docx>=1.0.0
 pytesseract>=0.3.10
 pdfplumber>=0.10.0
 

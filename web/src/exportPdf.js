@@ -57,9 +57,31 @@ export function exportPdf({ canvasDataURL, landmarks, pixelSpacing, fileName, an
 
   // ── X-ray image ──
   if (canvasDataURL) {
+    // Get image properties to calculate proper aspect ratio
+    const imgInfo = pdf.getImageProperties(canvasDataURL);
+    const aspectRatio = imgInfo.width / imgInfo.height;
+    
+    // Calculate size based on original image ratio but scaled to fit PDF
+    // We want to maintain the same visual appearance as in the web interface
     const imgMaxH = 110;
-    pdf.addImage(canvasDataURL, "PNG", margin, y, contentW, imgMaxH);
-    y += imgMaxH + 6;
+    const imgMaxW = contentW * 0.9; // Use 90% of content width for better visibility
+    
+    // Calculate display size maintaining aspect ratio
+    let displayH = imgMaxH;
+    let displayW = displayH * aspectRatio;
+    
+    // If width exceeds maximum, recalculate based on width
+    if (displayW > imgMaxW) {
+      displayW = imgMaxW;
+      displayH = displayW / aspectRatio;
+    }
+    
+    // Center the image horizontally
+    const x = margin + (contentW - displayW) / 2;
+    
+    // Add image with calculated dimensions (maintains what you see in web)
+    pdf.addImage(canvasDataURL, "PNG", x, y, displayW, displayH);
+    y += displayH + 6;
   }
 
   // ── Section helper ──
