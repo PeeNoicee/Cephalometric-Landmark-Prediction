@@ -1,287 +1,922 @@
 """
-RAG retriever: query ChromaDB for relevant textbook context, then call
-Qwen 2.5 14B via Ollama to generate a clinical diagnosis/remarks.
+Hybrid cephalometric diagnosis engine:
+  - Skeletal Pattern & Key Findings: deterministic rule-based (instant)
+  - Clinical Summary: ceph-summary (custom Ollama model with baked-in textbook rules)
+  - Fallback: deterministic summary if LLM call fails
+  - Textbook norms: Steiner, Ricketts, McNamara (per Cephalometric Analysis Guidelines).
 """
 import os
-import chromadb
 import ollama
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CHROMA_DIR = os.path.join(PROJECT_ROOT, "rag", "chroma_db")
-COLLECTION_NAME = "cephalometric_textbooks"
-EMBED_MODEL = "nomic-embed-text"
-LLM_MODEL = "qwen2.5:14b-instruct-q4_K_M"
-
-# ---------------------------------------------------------------------------
-# ChromaDB client (lazy singleton)
-# ---------------------------------------------------------------------------
-_collection = None
-
-def _get_collection():
-    global _collection
-    if _collection is None:
-        client = chromadb.PersistentClient(path=CHROMA_DIR)
-        _collection = client.get_collection(COLLECTION_NAME)
-    return _collection
-
-
-def retrieve_context(query: str, top_k: int = 6) -> list[str]:
-    """Retrieve the top-k most relevant textbook chunks for a query."""
-    collection = _get_collection()
-    resp = ollama.embed(model=EMBED_MODEL, input=query)
-    query_emb = resp["embeddings"][0]
-    results = collection.query(query_embeddings=[query_emb], n_results=top_k)
-    return results["documents"][0] if results["documents"] else []
+LLM_MODEL = "ceph-summary"
 
 
 # ---------------------------------------------------------------------------
-# Prompt construction
+# Helper: get measurement by name
 # ---------------------------------------------------------------------------
-SYSTEM_PROMPT = """You are a clinical cephalometric analysis assistant for orthodontic professionals.
-Your role is to interpret cephalometric measurements and provide a structured clinical diagnosis.
-All rules below are extracted and verified from Steiner, Ricketts, and McNamara textbooks.
-
-========================================================================
-1. STEINER ANALYSIS (Source: Steiner)
-========================================================================
-SNA (maxilla position relative to cranial base): Norm = 82°
-  - Above 82° = protrusive/prognathic maxilla
-  - Below 82° = recessive/retrognathic maxilla
-
-SNB (mandible position relative to cranial base): Norm = 80°
-  - Above 80° = prognathic mandible
-  - Below 80° = recessive/retrognathic mandible
-
-ANB (maxilla-mandible relationship): Norm = 2°
-  - ANB > 2° = Skeletal Class II (maxillary protrusion or mandibular retrusion)
-  - ANB < 2° (including negative) = Skeletal Class III tendency
-  - ANB ≈ 2° = Class I
-  NOTE: For skeletal classification, use these Steiner thresholds regardless of the [Normal] label.
-
-Mandibular Plane (GoGn-SN): Norm = 32°
-  - Above 32° = hyperdivergent (vertical growth, long face)
-  - Below 32° = hypodivergent (horizontal growth, short face, deep bite tendency)
-
-Interincisal Angle: Norm = 131° (per Steiner Table 7-1)
-  *** CRITICAL — READ CAREFULLY ***
-  In cephalometrics, "acute" and "obtuse" are relative to the NORM (131°), NOT to 90°.
-  - LESS than 131° (e.g., 113°, 120°, 125°) = "more acute" = PROCLINED incisors (tipped FORWARD)
-    -> Treatment: teeth need UPRIGHTING (moving back/straightening)
-    -> Even though 113° is mathematically >90°, it is cephalometrically ACUTE because it is BELOW the 131° norm
-  - GREATER than 131° (e.g., 140°, 145°) = "more obtuse" = RETROCLINED incisors (tipped BACKWARD)
-    -> Treatment: teeth need ADVANCING (moving forward)
-  NEVER call an interincisal angle below 131° "obtuse" or "retroclined."
-  NEVER recommend "advancement" for an angle below 131° — that would WORSEN protrusion.
-  Example: 113.4° is BELOW 131° -> acute -> proclined -> needs uprighting. NOT obtuse, NOT retroclined.
-
-========================================================================
-2. RICKETTS ANALYSIS (Source: Ricketts)
-========================================================================
-NOTE: Ricketts norms are for age 9. Adjust for adult patients as indicated.
-
-Facial Axis (Ba-N to PT-Gn): Norm = 90° ± 3.5° (no age adjustment)
-
-Facial Depth Angle (N-Pog to FH): Norm = 87° ± 3° (adjust +1° every 3 years)
-  - This measures chin ANTEROPOSTERIOR position, NOT vertical height
-  - Above norm = protrusive/forward-positioned chin
-  - Below norm = retrusive/retropositioned chin
-
-Mandibular Plane (MP-FH): Norm = 26° ± 4.5° (adjust -1° every 3 years)
-  - Above norm = hyperdivergent (vertical growth)
-  - Below norm = hypodivergent (horizontal growth)
-
-Convexity of Point A (A to N-Pog line, perpendicular): Norm = 2 mm ± 2 mm (adjust -1 mm every 3 years)
-  - Above norm = convex profile (Class II tendency)
-  - Below norm or negative = concave profile (Class III tendency)
-  - This is a PERPENDICULAR distance from point A to the N-Pog facial plane
-
-Lower Facial Height Angle (Xi-ANS to Xi-PM): Norm = 45° ± 4° (no age adjustment)
-
-========================================================================
-3. McNAMARA ANALYSIS (Source: McNamara)
-========================================================================
-Point A to N-Perpendicular: 0 mm (mixed dentition); 1 mm (adults)
-
-Mandibular Plane Angle (FH-Go-Me): Norm = 22° ± 4°
-
-Nasolabial Angle: Norm = 102° ± 8°
-
-PROPORTIONAL RELATIONSHIP TABLE (McNamara Table 10-1) — CRITICAL:
-Mandibular length (Co-Gn) must be evaluated RELATIVE to midfacial length (Co-A):
-  Small:  Co-A = 85 mm  -> Co-Gn = 105–108 mm (diff 20–24 mm), LAFH = 60–62 mm
-  Medium: Co-A = 94 mm  -> Co-Gn = 121–124 mm (diff 25–28 mm), LAFH = 65–67 mm
-  Large:  Co-A = 100 mm -> Co-Gn = 130–133 mm (diff 29–33 mm), LAFH = 70–73 mm
-Use interpolation for values between categories.
-If mandibular length is proportional to maxillary length per this table, it is NORMAL — even if it appears outside a generic fixed range.
-
-========================================================================
-4. PROFILE & CONSISTENCY RULES — CRITICAL
-========================================================================
-- Skeletal Class II (ANB > 2°) = CONVEX profile. NEVER call it "straight."
-- Skeletal Class III (ANB < 2°, especially negative) = CONCAVE profile.
-- Class I (ANB ≈ 2°) with balanced SNA/SNB = straight profile.
-- A retrognathic mandible (SNB < 80°) contributes to convexity even if facial convexity mm is small.
-- Your profile description MUST match your skeletal classification. Do NOT contradict yourself.
-
-========================================================================
-5. GROWTH PATTERN RULES
-========================================================================
-Hyperdivergent (long face):
-  - High Mandibular Plane Angle (Steiner >32°, McNamara >26°)
-  - AND/OR negative McNamara Facial Axis
-  - Associated with: open bite tendency, increased LAFH
-
-Hypodivergent (short face / deep bite):
-  - Low Mandibular Plane Angle
-  - AND/OR low Ricketts Lower Facial Height (<41°)
-  - Associated with: deep bite tendency, decreased LAFH
-
-Skeletal vs. Dental distinction:
-  - If SNA and SNB are both normal but ANB is elevated, the discrepancy may be dentoalveolar protrusion rather than a skeletal problem.
-
-========================================================================
-6. CROSS-ANALYSIS RECONCILIATION
-========================================================================
-Steiner, Ricketts, and McNamara use DIFFERENT reference planes and norms.
-They WILL sometimes contradict each other for the same patient. This is expected.
-
-Key differences to be aware of:
-  - Steiner uses SN plane; Ricketts/McNamara use Frankfort Horizontal (FH)
-  - Mandibular Plane Angle norms differ: Steiner = 32°, Ricketts = 26°, McNamara = 22°
-    A value of 27° is "Below normal" per Steiner but "Normal" per Ricketts and "Above normal" per McNamara.
-  - Maxillary position: Steiner uses SNA angle, McNamara uses Point A to N-Perpendicular (linear)
-
-How to handle contradictions:
-  1. CONSENSUS: When multiple analyses agree on a finding, state it with confidence.
-  2. DISAGREEMENT: When analyses contradict, acknowledge both interpretations and explain
-     that the difference is due to different reference planes/norms.
-     Example: "The mandibular plane angle is below the Steiner norm (32°), suggesting
-     hypodivergent growth, though it falls within the normal range per Ricketts (26° ± 4°)."
-  3. WEIGHT: For skeletal classification, prioritize Steiner ANB. For jaw size, prioritize
-     McNamara's proportional analysis. For growth direction, look for agreement across analyses.
-  4. Do NOT present a contradictory finding as a single definitive conclusion without context.
-
-========================================================================
-7. OUTPUT GUIDELINES
-========================================================================
-- STRICTLY respect [Normal], [Above normal], [Below normal] labels on measurements. If labeled [Normal], do NOT call it "slightly below/above" or "borderline."
-- Only describe a measurement as abnormal if it is explicitly labeled [Above normal] or [Below normal].
-- Exception: For ANB skeletal classification, use the Steiner threshold (2°) even if labeled [Normal].
-- NEVER contradict yourself across sections.
-- Cross-reference with provided textbook chunks for additional context.
-- Use professional orthodontic terminology.
-- Be concise and factual. Do not speculate beyond what the data supports.
-- Format with ### headings: Skeletal Pattern, Key Findings, Clinical Summary."""
-
-
-CLINICAL_HINTS = {
-    "Interincisal Angle": {
-        "low": "PROCLINED incisors (tipped forward/labially). Angle is MORE ACUTE than the 131° norm. Treatment: UPRIGHTING needed. Do NOT call this obtuse or retroclined.",
-        "high": "RETROCLINED incisors (tipped backward/lingually). Angle is MORE OBTUSE than the 131° norm. Treatment: ADVANCING needed.",
-        "normal": "Within normal range — no significant dental protrusion or retrusion.",
-    },
-    "Facial Depth Angle": {
-        "high": "Forward/protrusive chin position (anteroposterior). NOT related to vertical height.",
-        "low": "Retrusive/retropositioned chin (anteroposterior). NOT related to vertical height.",
-        "normal": "Chin position is balanced relative to Frankfort Horizontal.",
-    },
-    "Facial Convexity": {
-        "high": "Convex profile — maxilla is forward relative to the N-Pog facial plane.",
-        "low": "Concave profile — Class III tendency.",
-        "normal": "Balanced profile convexity.",
-    },
-    "SNA": {
-        "high": "Protrusive/prognathic maxilla.",
-        "low": "Recessive/retrognathic maxilla.",
-        "normal": "Maxilla is normally positioned relative to cranial base.",
-    },
-    "SNB": {
-        "high": "Prognathic mandible.",
-        "low": "Recessive/retrognathic mandible.",
-        "normal": "Mandible is normally positioned relative to cranial base.",
-    },
-}
-
-
-def build_user_prompt(measurements: list[dict], context_chunks: list[str]) -> str:
-    """Build the user prompt with measurements and retrieved textbook context."""
-    # Format measurements with pre-computed clinical hints
-    meas_lines = []
+def _get(measurements, name):
     for m in measurements:
-        status_label = {"normal": "Normal", "high": "Above normal", "low": "Below normal"}.get(m["status"], "")
-        val_str = f"{m['value']}{m['units']}" if m["value"] is not None else "N/A"
-        line = f"  - {m['name']}: {val_str} (Normal: {m['normal']}) [{status_label}]"
-        # Attach clinical interpretation hint if available
-        hints = CLINICAL_HINTS.get(m["name"], {})
-        hint = hints.get(m["status"])
-        if hint:
-            line += f"\n    -> Clinical meaning: {hint}"
-        meas_lines.append(line)
-
-    meas_block = "\n".join(meas_lines)
-
-    # Format context
-    ctx_block = "\n\n---\n\n".join(context_chunks)
-
-    return f"""Below are the cephalometric measurements from a patient's lateral cephalogram analysis, followed by relevant textbook references.
-
-## Measurements
-
-{meas_block}
-
-## Textbook References
-
-{ctx_block}
-
-## Task
-
-Based on the measurements above and the textbook references, provide a structured clinical interpretation. Include:
-1. **Skeletal Pattern** — Classify the skeletal relationship and growth pattern.
-2. **Key Findings** — List the significant findings, noting any measurements outside normal range and their clinical meaning. USE the "Clinical meaning" hints provided with each measurement — do not override them with your own interpretation.
-3. **Clinical Summary** — A brief overall assessment with potential treatment considerations.
-
-IMPORTANT REMINDER: For the Interincisal Angle, if the value is BELOW 131°, the teeth are PROCLINED (tipped forward) and need UPRIGHTING. Do NOT call it obtuse or retroclined. The "Clinical meaning" hint attached to the measurement is authoritative — follow it exactly."""
+        if m["name"] == name:
+            return m
+    return None
 
 
 # ---------------------------------------------------------------------------
-# Generate diagnosis
+# Rule-based: Skeletal Pattern
 # ---------------------------------------------------------------------------
-def generate_diagnosis(measurements: list[dict]) -> str:
-    """
-    Full RAG pipeline:
-      1. Build a query from abnormal measurements
-      2. Retrieve relevant textbook chunks
-      3. Call Qwen 2.5 14B to generate diagnosis
-    """
-    # Build retrieval query focused on abnormal findings
-    abnormal = [m for m in measurements if m["status"] != "normal" and m["value"] is not None]
-    normal_ms = [m for m in measurements if m["status"] == "normal" and m["value"] is not None]
+def _build_skeletal_pattern(measurements):
+    lines = []
 
-    if abnormal:
-        query_parts = [f"{m['name']} {m['value']}{m['units']} {'above' if m['status'] == 'high' else 'below'} normal" for m in abnormal]
-        query = "Cephalometric analysis interpretation: " + "; ".join(query_parts)
+    anb = _get(measurements, "ANB")
+    sna = _get(measurements, "SNA")
+    snb = _get(measurements, "SNB")
+
+    # --- Skeletal classification from ANB (Steiner: norm 2°) ---
+    if anb and anb["value"] is not None:
+        v = anb["value"]
+        if v > 4:
+            lines.append(f"**Skeletal Class II**: ANB of {v}° (Steiner norm 2°) indicates a significant maxillomandibular discrepancy with the maxilla positioned ahead of the mandible.")
+        elif v > 2:
+            lines.append(f"**Skeletal Class II tendency**: ANB of {v}° (Steiner norm 2°) indicates a mild Class II skeletal relationship.")
+        elif v < 0:
+            lines.append(f"**Skeletal Class III**: ANB of {v}° (Steiner norm 2°) indicates the mandible is ahead of the maxilla, suggesting a Class III skeletal relationship.")
+        elif v < 2:
+            lines.append(f"**Skeletal Class III tendency**: ANB of {v}° (Steiner norm 2°) suggests a mild Class III tendency with the mandible slightly ahead.")
+        else:
+            lines.append(f"**Skeletal Class I**: ANB of {v}° (Steiner norm 2°) indicates a balanced maxillomandibular relationship.")
+
+    # --- SNA: maxilla to cranial base (Steiner: norm 82°) ---
+    if sna and sna["value"] is not None:
+        v = sna["value"]
+        if sna["status"] == "high":
+            lines.append(f"SNA of {v}° (Steiner norm 82°) indicates a relative forward positioning or protrusive maxilla.")
+        elif sna["status"] == "low":
+            lines.append(f"SNA of {v}° (Steiner norm 82°) indicates a relative backward or recessive location of the maxilla.")
+        else:
+            lines.append(f"SNA of {v}° (Steiner norm 82°) is within normal limits — maxilla is normally positioned relative to the cranial base.")
+
+    # --- SNB: mandible to cranial base (Steiner: norm 80°) ---
+    if snb and snb["value"] is not None:
+        v = snb["value"]
+        if snb["status"] == "high":
+            lines.append(f"SNB of {v}° (Steiner norm 80°) suggests a prognathic mandible.")
+        elif snb["status"] == "low":
+            lines.append(f"SNB of {v}° (Steiner norm 80°) indicates a recessive mandible.")
+        else:
+            lines.append(f"SNB of {v}° (Steiner norm 80°) is within normal limits — mandible is normally positioned relative to the cranial base.")
+
+    # --- Source of Class II discrepancy ---
+    if anb and anb["value"] is not None and anb["value"] > 2:
+        sna_s = sna["status"] if sna else None
+        snb_s = snb["status"] if snb else None
+        if snb_s == "low" and sna_s in ("normal", None):
+            lines.append("The Class II relationship is primarily due to a **recessive mandible** (low SNB) with a normally positioned maxilla.")
+        elif sna_s == "high" and snb_s in ("normal", None):
+            lines.append("The Class II relationship is primarily due to a **protrusive maxilla** (high SNA) with a normally positioned mandible.")
+        elif sna_s == "high" and snb_s == "low":
+            lines.append("The Class II relationship involves both a **protrusive maxilla** (high SNA) and a **recessive mandible** (low SNB).")
+        elif sna_s == "normal" and snb_s == "normal":
+            lines.append("Both SNA and SNB are within normal limits — the elevated ANB may reflect a **dentoalveolar** rather than skeletal discrepancy.")
+
+    # --- Growth pattern from mandibular plane angles ---
+    # Steiner GoGn-SN: norm 32° (excessively high or low = unfavorable growth)
+    # Ricketts FH-MP: norm at age 9 = 26°, decreases -1°/3yrs; high = open bite, low = deep bite
+    # NOTE: MPA measures VERTICAL growth direction only, NOT anteroposterior jaw position.
+    steiner_mp = _get(measurements, "Mandibular Plane")
+    ricketts_mp = _get(measurements, "Mandibular Plane Angle")
+
+    indicators = []  # (pattern, description)
+    if steiner_mp and steiner_mp["value"] is not None:
+        v = steiner_mp["value"]
+        if steiner_mp["status"] == "high":
+            indicators.append(("hyper", f"Steiner GoGn-SN {v}° is above the mean of 32°, suggesting an unfavorable vertical growth pattern"))
+        elif steiner_mp["status"] == "low":
+            indicators.append(("hypo", f"Steiner GoGn-SN {v}° is below the mean of 32°, suggesting a horizontal growth tendency"))
+        else:
+            indicators.append(("normal", f"Steiner GoGn-SN {v}° is within normal range (mean 32°)"))
+
+    if ricketts_mp and ricketts_mp["value"] is not None:
+        v = ricketts_mp["value"]
+        if ricketts_mp["status"] == "high":
+            indicators.append(("hyper", f"Ricketts FH-MP {v}° is above normal (norm 26° at age 9, adjusted with age), implying an open bite tendency"))
+        elif ricketts_mp["status"] == "low":
+            indicators.append(("hypo", f"Ricketts FH-MP {v}° is below normal (norm 26° at age 9, adjusted with age), implying a skeletal deep bite"))
+        else:
+            indicators.append(("normal", f"Ricketts FH-MP {v}° is within normal range (norm 26° ± 4°)"))
+
+    if indicators:
+        patterns = [i[0] for i in indicators]
+        details = "; ".join(i[1] for i in indicators)
+
+        if all(p == "hyper" for p in patterns):
+            lines.append(f"**Hyperdivergent growth pattern** (vertical growth, long face): {details}.")
+        elif all(p == "hypo" for p in patterns):
+            lines.append(f"**Hypodivergent growth pattern** (horizontal growth, short face): {details}.")
+        elif all(p == "normal" for p in patterns):
+            lines.append(f"**Normal growth pattern**: {details}.")
+        else:
+            # Cross-analysis disagreement — different reference planes and thresholds
+            steiner_val = steiner_mp["value"] if steiner_mp and steiner_mp["value"] is not None else None
+            ricketts_val = ricketts_mp["value"] if ricketts_mp and ricketts_mp["value"] is not None else None
+            steiner_s = steiner_mp["status"] if steiner_mp else None
+            ricketts_s = ricketts_mp["status"] if ricketts_mp else None
+            threshold_note = ""
+            if steiner_s == "normal" and ricketts_s == "high":
+                threshold_note = (
+                    f" Steiner GoGn-SN {steiner_val}° falls within its wider normal range (32° ± 3°), "
+                    f"while Ricketts FH-MP {ricketts_val}° exceeds its threshold (26° ± 4° at age 9). "
+                    f"A definitive vertical classification cannot be made — "
+                    f"clinical correlation with facial proportions is recommended."
+                )
+            elif steiner_s == "high" and ricketts_s == "normal":
+                threshold_note = (
+                    f" Steiner GoGn-SN {steiner_val}° exceeds its threshold (32° ± 3°), "
+                    f"while Ricketts FH-MP {ricketts_val}° falls within its normal range (26° ± 4° at age 9). "
+                    f"A definitive vertical classification cannot be made — "
+                    f"clinical correlation with facial proportions is recommended."
+                )
+            lines.append(
+                f"**Mixed growth pattern indicators**: {details}. "
+                f"Note: Steiner uses the SN plane while Ricketts uses Frankfort Horizontal (FH), "
+                f"and they have different normal ranges.{threshold_note}"
+            )
+
+    # --- Profile ---
+    # Ricketts Convexity of Point A (A to N-Pog): norm at age 9 = 2mm, decreases -1mm/3yrs
+    # High positive = Class II skeletal pattern; low/negative = Class III tendency
+    facial_conv = _get(measurements, "Facial Convexity")
+    if anb and anb["value"] is not None:
+        v = anb["value"]
+        if v > 2:
+            profile = "Convex"
+        elif v < 0:
+            profile = "Concave"
+        elif v < 2:
+            profile = "Mildly concave"
+        else:
+            profile = "Straight"
+
+        conv_note = ""
+        if facial_conv and facial_conv["value"] is not None:
+            fc = facial_conv["value"]
+            if facial_conv["status"] == "high":
+                conv_note = f", supported by Ricketts Convexity of Point A at {fc}mm (high positive value suggests a Class II skeletal pattern; norm 2mm at age 9, decreases with age)"
+            elif facial_conv["status"] == "low":
+                conv_note = f", with Ricketts Convexity of Point A at {fc}mm (low/negative value suggests a Class III tendency; norm 2mm at age 9, decreases with age)"
+            else:
+                conv_note = f", Ricketts Convexity of Point A at {fc}mm within normal range"
+
+        lines.append(f"**{profile} profile**{conv_note}.")
+
+    return "### Skeletal Pattern\n\n" + "\n\n".join(lines) if lines else ""
+
+
+# ---------------------------------------------------------------------------
+# Rule-based: Key Findings
+# ---------------------------------------------------------------------------
+def _build_key_findings(measurements):
+    findings = []
+
+    # --- McNamara Proportional Analysis ---
+    # Per McNamara philosophy: "A mandible is not 'short' just because it's less
+    # than 120mm; it's only short if it's less than 25mm longer than the maxilla."
+    # Proportionality to each other > absolute population norms.
+    max_len = _get(measurements, "Maxillary Length")
+    mand_len = _get(measurements, "Mandibular Length")
+    afh = _get(measurements, "Anterior Facial Height")
+
+    if max_len and mand_len and max_len["value"] and mand_len["value"]:
+        co_a = max_len["value"]
+        co_gn = mand_len["value"]
+        diff = co_gn - co_a
+
+        # McNamara Table 10-1 — linear interpolation from anchor points
+        # Anchor points: (Co-A, Co-Gn low, Co-Gn high, LAFH low, LAFH high)
+        _table = [
+            (85, 105, 108, 60, 62),
+            (87, 108, 110, 61, 63),
+            (89, 111, 113, 63, 65),
+            (91, 114, 116, 64, 66),
+            (92, 117, 120, 65, 67),
+            (94, 121, 124, 66, 67),
+            (97, 127, 130, 68, 71),
+            (100, 130, 133, 70, 74),
+        ]
+
+        # Find bracketing entries and interpolate
+        if co_a <= _table[0][0]:
+            ideal_lo, ideal_hi = _table[0][1], _table[0][2]
+            lafh_lo, lafh_hi = _table[0][3], _table[0][4]
+        elif co_a >= _table[-1][0]:
+            ideal_lo, ideal_hi = _table[-1][1], _table[-1][2]
+            lafh_lo, lafh_hi = _table[-1][3], _table[-1][4]
+        else:
+            for i in range(len(_table) - 1):
+                if _table[i][0] <= co_a <= _table[i + 1][0]:
+                    t = (co_a - _table[i][0]) / (_table[i + 1][0] - _table[i][0])
+                    ideal_lo = round(_table[i][1] + t * (_table[i + 1][1] - _table[i][1]))
+                    ideal_hi = round(_table[i][2] + t * (_table[i + 1][2] - _table[i][2]))
+                    lafh_lo = round(_table[i][3] + t * (_table[i + 1][3] - _table[i][3]))
+                    lafh_hi = round(_table[i][4] + t * (_table[i + 1][4] - _table[i][4]))
+                    break
+
+        ideal_diff_lo = ideal_lo - co_a
+        ideal_diff_hi = ideal_hi - co_a
+
+        # McNamara face size category (from Table 10-1)
+        if co_a <= 87:
+            size_cat = "Small"
+        elif co_a <= 96:
+            size_cat = "Medium"
+        else:
+            size_cat = "Large"
+
+        # McNamara Maxillomandibular Differential category
+        # Small: diff 20-23mm; Medium: diff 25-27mm; Large: diff 30-33mm
+        if diff < 20:
+            diff_cat = "below the Small category range (20-23mm)"
+        elif diff <= 23:
+            diff_cat = "within the Small category range (20-23mm)"
+        elif diff < 25:
+            diff_cat = "between Small and Medium ranges"
+        elif diff <= 27:
+            diff_cat = "within the Medium category range (25-27mm)"
+        elif diff < 30:
+            diff_cat = "between Medium and Large ranges"
+        elif diff <= 33:
+            diff_cat = "within the Large category range (30-33mm)"
+        else:
+            diff_cat = "above the Large category range (30-33mm)"
+
+        # ±2mm tolerance for measurement variability
+        if ideal_lo - 2 <= co_gn <= ideal_hi + 2:
+            findings.append(
+                f"**McNamara Proportional Analysis**: Maxillary length {co_a:.1f}mm, "
+                f"mandibular length {co_gn:.1f}mm — **proportional** "
+                f"(expected {ideal_lo}-{ideal_hi}mm for a {co_a:.1f}mm midface). "
+                f"Maxillomandibular differential of {diff:.1f}mm is {diff_cat}. "
+                f"Face size category: **{size_cat}**."
+            )
+        elif co_gn < ideal_lo - 2:
+            findings.append(
+                f"**McNamara Proportional Analysis**: Maxillary length {co_a:.1f}mm, "
+                f"mandibular length {co_gn:.1f}mm — mandible is **short relative to maxilla** "
+                f"(expected {ideal_lo}-{ideal_hi}mm for a {co_a:.1f}mm midface). "
+                f"Maxillomandibular differential of {diff:.1f}mm is {diff_cat}. "
+                f"Face size category: **{size_cat}**."
+            )
+        else:
+            findings.append(
+                f"**McNamara Proportional Analysis**: Maxillary length {co_a:.1f}mm, "
+                f"mandibular length {co_gn:.1f}mm — mandible is **long relative to maxilla** "
+                f"(expected {ideal_lo}-{ideal_hi}mm for a {co_a:.1f}mm midface). "
+                f"Maxillomandibular differential of {diff:.1f}mm is {diff_cat}. "
+                f"Face size category: **{size_cat}**."
+            )
+
+    if afh and afh["value"] is not None and afh["status"] != "normal":
+        v = afh["value"]
+        word = "increased" if afh["status"] == "high" else "decreased"
+        findings.append(f"**Anterior Facial Height**: {v}mm is {word} (norm 120 ± 5mm).")
+
+    # --- Interincisal Angle (Steiner: norm 131° per Table 7-1, or 130° general) ---
+    # Acute (< 130°): teeth require uprighting. Obtuse (> 130°): teeth require advancing.
+    ia = _get(measurements, "Interincisal Angle")
+    if ia and ia["value"] is not None:
+        v = ia["value"]
+        if ia["status"] == "low":
+            findings.append(
+                f"**Interincisal Angle**: {v}° is below the Steiner norm of 131°. "
+                f"The angle is **acute**, indicating **proclined incisors** (tipped forward/labially). "
+                f"Per Steiner, teeth with acute interincisal angles often require **uprighting**."
+            )
+        elif ia["status"] == "high":
+            findings.append(
+                f"**Interincisal Angle**: {v}° is above the Steiner norm of 131°. "
+                f"The angle is **obtuse**, indicating **retroclined incisors** (tipped backward/lingually). "
+                f"Per Steiner, teeth with obtuse interincisal angles often require **advancing** or correction of axial inclination."
+            )
+        else:
+            findings.append(f"**Interincisal Angle**: {v}° is within normal range (Steiner norm 131°) — no significant dental protrusion or retrusion.")
+
+    # --- Facial Depth Angle (Ricketts: N-Pog to FH) ---
+    # Norm at age 9: 87°, increases +1° every 3 years. Indicates if Class II/III is caused by mandibular position.
+    fda = _get(measurements, "Facial Depth Angle")
+    if fda and fda["value"] is not None and fda["status"] != "normal":
+        v = fda["value"]
+        if fda["status"] == "high":
+            findings.append(
+                f"**Facial Depth Angle (Ricketts)**: {v}° is above normal (norm 87° at age 9, +1°/3yrs). "
+                f"This indicates a forward chin position, suggesting the mandible is **not the cause** of a Class II pattern if present."
+            )
+        else:
+            findings.append(
+                f"**Facial Depth Angle (Ricketts)**: {v}° is below normal (norm 87° at age 9, +1°/3yrs). "
+                f"This indicates a retrusive chin position, suggesting a **mandibular contribution** to a Class II pattern."
+            )
+
+    # --- Lower Facial Height (Ricketts: Xi-ANS to Xi-PM, norm 45° ± 4°) ---
+    # Low values indicate a skeletal deep bite.
+    lfh = _get(measurements, "Lower Facial Height %")
+    if lfh and lfh["value"] is not None and lfh["status"] != "normal":
+        v = lfh["value"]
+        if lfh["status"] == "high":
+            findings.append(
+                f"**Lower Facial Height**: {v}% is increased (norm 55% ± 5%). "
+                f"Per Ricketts, increased lower facial height is associated with vertical excess and open bite tendency."
+            )
+        else:
+            findings.append(
+                f"**Lower Facial Height**: {v}% is decreased (norm 55% ± 5%). "
+                f"Per Ricketts, decreased lower facial height indicates a **skeletal deep bite**."
+            )
+
+    # --- Skeletal vs. Dental Correction Distinction ---
+    # Per textbooks: if ANB abnormal but incisors normal → skeletal issue
+    # If ANB normal but interincisal angle acute/obtuse → dentoalveolar issue
+    anb = _get(measurements, "ANB")
+    ia_m = _get(measurements, "Interincisal Angle")
+    anb_abnormal = anb and anb["value"] is not None and anb["status"] != "normal"
+    ia_abnormal = ia_m and ia_m["value"] is not None and ia_m["status"] != "normal"
+    ia_normal = ia_m and ia_m["value"] is not None and ia_m["status"] == "normal"
+    anb_normal = anb and anb["value"] is not None and anb["status"] == "normal"
+
+    if anb_abnormal and ia_normal:
+        findings.append(
+            "**Correction Type**: The skeletal discrepancy (abnormal ANB) with normal incisor "
+            "inclination indicates the issue is **primarily skeletal** in origin, requiring "
+            "skeletal correction rather than dental compensation."
+        )
+    elif anb_normal and ia_abnormal:
+        findings.append(
+            "**Correction Type**: The normal skeletal relationship (ANB within limits) with "
+            "abnormal incisor inclination indicates the issue is **dentoalveolar** in origin, "
+            "requiring dental correction rather than skeletal intervention."
+        )
+    elif anb_abnormal and ia_abnormal:
+        findings.append(
+            "**Correction Type**: Both skeletal (abnormal ANB) and dental (abnormal Interincisal Angle) "
+            "components are present, requiring a **combined skeletal and dental** treatment approach."
+        )
+
+    # --- Cross-Analysis Validation (Steiner SNA/SNB vs Ricketts Facial Depth) ---
+    # Detect physically impossible contradictions that indicate landmark detection errors
+    snb = _get(measurements, "SNB")
+    fda = _get(measurements, "Facial Depth Angle")
+    if snb and fda and snb["value"] is not None and fda["value"] is not None:
+        snb_s = snb["status"]
+        fda_s = fda["status"]
+        if snb_s == "low" and fda_s == "high":
+            # CONTRADICTION: SNB says recessive, Facial Depth says forward — impossible
+            findings.append(
+                "**⚠ Cross-Analysis Contradiction**: Steiner SNB ({snb_v}°) indicates a recessive mandible, "
+                "but Ricketts Facial Depth ({fda_v}°) indicates a forward chin position. "
+                "It is **anatomically impossible** for the mandible to be simultaneously retrusive and protrusive. "
+                "This contradiction strongly suggests a **landmark detection error** — "
+                "verify the placement of Sella (S), Nasion (N), Pogonion (Pog), and Porion/Orbitale (FH plane). "
+                "Clinical findings from these two measurements should NOT be relied upon until re-verified.".format(
+                    snb_v=snb["value"], fda_v=fda["value"]
+                )
+            )
+        elif snb_s == "high" and fda_s == "low":
+            # CONTRADICTION: SNB says prognathic, Facial Depth says retrusive — impossible
+            findings.append(
+                "**⚠ Cross-Analysis Contradiction**: Steiner SNB ({snb_v}°) indicates a prognathic mandible, "
+                "but Ricketts Facial Depth ({fda_v}°) indicates a retrusive chin position. "
+                "This contradiction strongly suggests a **landmark detection error** — "
+                "verify the placement of Sella (S), Nasion (N), Pogonion (Pog), and Porion/Orbitale (FH plane). "
+                "Clinical findings from these two measurements should NOT be relied upon until re-verified.".format(
+                    snb_v=snb["value"], fda_v=fda["value"]
+                )
+            )
+        elif snb_s == "low" and fda_s == "low":
+            findings.append(
+                "**Cross-Analysis Validation**: Both Steiner SNB and Ricketts Facial Depth "
+                "confirm mandibular retrusion — consensus on recessive mandible."
+            )
+        elif snb_s == "high" and fda_s == "high":
+            findings.append(
+                "**Cross-Analysis Validation**: Both Steiner SNB and Ricketts Facial Depth "
+                "confirm mandibular prognathism — consensus on forward mandible."
+            )
+        elif snb_s == "low" and fda_s == "normal":
+            findings.append(
+                "**Cross-Analysis Note**: Steiner SNB indicates mandibular retrusion, but "
+                "Ricketts Facial Depth is within normal limits. This may reflect "
+                "different reference planes (SN vs. Frankfort Horizontal)."
+            )
+        elif snb_s == "normal" and fda_s == "low":
+            findings.append(
+                "**Cross-Analysis Note**: Ricketts Facial Depth suggests a retrusive chin, "
+                "but Steiner SNB is within normal limits. This may reflect "
+                "different reference planes (Frankfort Horizontal vs. SN)."
+            )
+
+    # --- Steiner Acceptable Compromise ("Chevrons") ---
+    # Per Steiner textbook: when ANB deviates from 2°, the "ideal" lower incisor
+    # position shifts. The Chevron table defines acceptable 1-to-NB positions:
+    #   ANB -2° → 1-NB 5.5mm / 31°   (more proclined acceptable)
+    #   ANB  0° → 1-NB 4.75mm / 28°
+    #   ANB  2° → 1-NB 4.0mm / 25°   (ideal)
+    #   ANB  4° → 1-NB 3.25mm / 22°
+    #   ANB  6° → 1-NB 2.5mm / 19°   (more upright acceptable)
+    # Since 1-to-NB is not computed, we apply the principle to the interincisal
+    # angle: as ANB increases (Class II), incisors naturally compensate with
+    # proclination, making an acute IA an acceptable compromise.
+    if anb and anb["value"] is not None and ia_m and ia_m["value"] is not None:
+        anb_v = anb["value"]
+        ia_v = ia_m["value"]
+        # Per Chevron logic: each 2° ANB deviation shifts ideal IA by ~3-4°
+        # Interpolate: ideal IA ≈ 131° - (ANB - 2°) × 2° (approximate)
+        adjusted_ia_norm = 131 - (anb_v - 2) * 2
+        if anb_v >= 5 and ia_v < 131 and ia_v >= adjusted_ia_norm - 5:
+            findings.append(
+                f"**Steiner Acceptable Compromise (Chevrons)**: With ANB of {anb_v}° "
+                f"(significantly Class II), the Steiner Chevron chart indicates that "
+                f"the lower incisors should be positioned more upright than the standard "
+                f"norm (1-to-NB ~{max(2.5, 4.0 - (anb_v - 2) * 0.375):.1f}mm / "
+                f"~{max(19, 25 - (anb_v - 2) * 1.5):.0f}° instead of 4mm/25°). "
+                f"The acute interincisal angle of {ia_v}° may therefore represent an "
+                f"**acceptable dental compensation** for the skeletal discrepancy rather "
+                f"than a primary dental problem requiring correction."
+            )
+        elif anb_v <= -1 and ia_v > 131 and ia_v <= adjusted_ia_norm + 5:
+            findings.append(
+                f"**Steiner Acceptable Compromise (Chevrons)**: With ANB of {anb_v}° "
+                f"(Class III tendency), the Steiner Chevron chart indicates that the "
+                f"lower incisors should be positioned more proclined than the standard "
+                f"norm (1-to-NB ~{min(5.5, 4.0 + abs(anb_v - 2) * 0.375):.1f}mm / "
+                f"~{min(31, 25 + abs(anb_v - 2) * 1.5):.0f}° instead of 4mm/25°). "
+                f"The obtuse interincisal angle of {ia_v}° may therefore represent an "
+                f"**acceptable dental compensation** for the skeletal discrepancy rather "
+                f"than a primary dental problem requiring correction."
+            )
+
+    # --- Extreme Value Detection (Landmark Error Flagging) ---
+    # Physiologically implausible values suggest landmark detection errors
+    _extreme_checks = [
+        ("SNA", 65, 95, "SNA", "Sella, Nasion, or Point A"),
+        ("SNB", 65, 92, "SNB", "Sella, Nasion, or Point B"),
+        ("ANB", -10, 15, "ANB", "Points A and B"),
+        ("Mandibular Plane", 15, 55, "GoGn-SN", "Gonion, Gnathion, Sella, or Nasion"),
+        ("Mandibular Plane Angle", 10, 50, "FH-MP", "Porion, Orbitale, Gonion, or Menton"),
+        ("Interincisal Angle", 90, 170, "Interincisal Angle", "upper and lower incisor landmarks"),
+        ("Facial Depth Angle", 75, 105, "Facial Depth", "Nasion, Pogonion, Porion, or Orbitale"),
+    ]
+    extreme_flags = []
+    for name, lo, hi, label, lm_names in _extreme_checks:
+        m = _get(measurements, name)
+        if m and m["value"] is not None:
+            if m["value"] < lo or m["value"] > hi:
+                extreme_flags.append(f"{label} = {m['value']}° (physiological range {lo}°-{hi}°; check {lm_names})")
+    if extreme_flags:
+        findings.append(
+            "**⚠ Extreme Value Alert**: The following measurements fall outside physiologically "
+            "plausible ranges, strongly suggesting **landmark detection errors**:\n"
+            + "\n".join(f"  - {f}" for f in extreme_flags)
+        )
+
+    # --- Profile Consistency Check (ANB Class vs Facial Convexity) ---
+    # Per Ricketts: Convexity of Point A should agree with ANB classification
+    # Positive convexity = Class II; negative = Class III; near zero = Class I
+    facial_conv = _get(measurements, "Facial Convexity")
+    if anb and anb["value"] is not None and facial_conv and facial_conv["value"] is not None:
+        anb_v = anb["value"]
+        fc_v = facial_conv["value"]
+        fc_s = facial_conv["status"]
+        # ANB says Class II but convexity is low/negative (Class III profile)
+        if anb_v > 4 and fc_s == "low":
+            findings.append(
+                f"**⚠ Profile Inconsistency**: ANB of {anb_v}° indicates Class II, but "
+                f"Facial Convexity of {fc_v}mm suggests a Class III profile. "
+                f"This contradicts expected skeletal relationships and may indicate "
+                f"a landmark detection error at Point A, Nasion, or Pogonion."
+            )
+        # ANB says Class III but convexity is high (Class II profile)
+        elif anb_v < 0 and fc_s == "high":
+            findings.append(
+                f"**⚠ Profile Inconsistency**: ANB of {anb_v}° indicates Class III, but "
+                f"Facial Convexity of {fc_v}mm suggests a Class II profile. "
+                f"This contradicts expected skeletal relationships and may indicate "
+                f"a landmark detection error at Point A, Nasion, or Pogonion."
+            )
+
+    # --- ANB vs McNamara Proportional Consistency ---
+    # Per McNamara philosophy: "A mandible is not 'short' just because it's less
+    # than 120mm; it's only short if the differential is less than expected."
+    # If ANB says Class II (mandibular retrusion) but McNamara says mandible is
+    # proportionally long (or vice versa), this is a major inconsistency.
+    if anb and anb["value"] is not None and max_len and mand_len:
+        if max_len["value"] and mand_len["value"]:
+            co_a = max_len["value"]
+            co_gn = mand_len["value"]
+            # Re-run quick proportional check
+            _tbl = [
+                (85, 105, 108), (87, 108, 110), (89, 111, 113), (91, 114, 116),
+                (92, 117, 120), (94, 121, 124), (97, 127, 130), (100, 130, 133),
+            ]
+            if co_a <= _tbl[0][0]:
+                _ilo, _ihi = _tbl[0][1], _tbl[0][2]
+            elif co_a >= _tbl[-1][0]:
+                _ilo, _ihi = _tbl[-1][1], _tbl[-1][2]
+            else:
+                for i in range(len(_tbl) - 1):
+                    if _tbl[i][0] <= co_a <= _tbl[i + 1][0]:
+                        t = (co_a - _tbl[i][0]) / (_tbl[i + 1][0] - _tbl[i][0])
+                        _ilo = round(_tbl[i][1] + t * (_tbl[i + 1][1] - _tbl[i][1]))
+                        _ihi = round(_tbl[i][2] + t * (_tbl[i + 1][2] - _tbl[i][2]))
+                        break
+
+            anb_v = anb["value"]
+            mand_long = co_gn > _ihi + 2
+            mand_short = co_gn < _ilo - 2
+
+            # Class II (ANB > 4°) + long mandible = inconsistent
+            if anb_v > 4 and mand_long:
+                findings.append(
+                    f"**⚠ Skeletal–Proportional Inconsistency**: Steiner ANB of {anb_v}° "
+                    f"suggests Class II with mandibular deficiency, but McNamara proportional "
+                    f"analysis shows the mandible is **long relative to the maxilla** "
+                    f"(Co-Gn {co_gn:.1f}mm vs expected {_ilo}-{_ihi}mm). Per McNamara, "
+                    f"a mandible is not 'short' just because SNB is low — it is only short "
+                    f"if its length is disproportionate to the maxilla. This discrepancy "
+                    f"suggests the Class II pattern may be due to **cranial base geometry** "
+                    f"(SN plane orientation) rather than true mandibular deficiency."
+                )
+            # Class III (ANB < 0°) + short mandible = inconsistent
+            elif anb_v < 0 and mand_short:
+                findings.append(
+                    f"**⚠ Skeletal–Proportional Inconsistency**: Steiner ANB of {anb_v}° "
+                    f"suggests Class III with mandibular excess, but McNamara proportional "
+                    f"analysis shows the mandible is **short relative to the maxilla** "
+                    f"(Co-Gn {co_gn:.1f}mm vs expected {_ilo}-{_ihi}mm). This discrepancy "
+                    f"suggests the Class III pattern may be due to **cranial base geometry** "
+                    f"rather than true mandibular prognathism."
+                )
+
+    # --- Ricketts Age-Dependency Note ---
+    # Per Ricketts philosophy: norms are age-adjusted. "A 90° facial depth is
+    # 'protrusive' for a 9-year-old but 'normal' for an 18-year-old."
+    # Flag Ricketts measurements that use age-adjusted norms.
+    ricketts_used = []
+    ricketts_mp_r = _get(measurements, "Mandibular Plane Angle")
+    if ricketts_mp_r and ricketts_mp_r["value"] is not None and ricketts_mp_r["status"] != "normal":
+        ricketts_used.append(f"FH-MP {ricketts_mp_r['value']}° (norm 26° at age 9, -1°/3yrs)")
+    fda_r = _get(measurements, "Facial Depth Angle")
+    if fda_r and fda_r["value"] is not None and fda_r["status"] != "normal":
+        ricketts_used.append(f"Facial Depth {fda_r['value']}° (norm 87° at age 9, +1°/3yrs)")
+    facial_conv_r = _get(measurements, "Facial Convexity")
+    if facial_conv_r and facial_conv_r["value"] is not None and facial_conv_r["status"] != "normal":
+        ricketts_used.append(f"Facial Convexity {facial_conv_r['value']}mm (norm 2mm at age 9, -1mm/3yrs)")
+    if ricketts_used:
+        findings.append(
+            "**Ricketts Age-Adjustment Note**: The following Ricketts measurements use "
+            "age-adjusted norms. Without known patient age, values are compared to the "
+            "age-9 baseline. In older patients, the expected norms differ:\n"
+            + "\n".join(f"  - {r}" for r in ricketts_used)
+        )
+
+    # --- Catch any remaining abnormal measurements ---
+    covered = {
+        "ANB", "SNA", "SNB", "Mandibular Plane", "Mandibular Plane Angle",
+        "Facial Convexity", "Maxillary Length", "Mandibular Length",
+        "Anterior Facial Height", "Interincisal Angle", "Facial Depth Angle",
+        "Lower Facial Height %",
+    }
+    for m in measurements:
+        if m["name"] not in covered and m["status"] != "normal" and m["value"] is not None:
+            word = "above" if m["status"] == "high" else "below"
+            findings.append(f"**{m['name']}**: {m['value']}{m['units']} is {word} normal range ({m['normal']}).")
+
+    if not findings:
+        findings.append("All measurements are within normal ranges.")
+
+    return "### Key Findings\n\n" + "\n\n".join(findings)
+
+
+# ---------------------------------------------------------------------------
+# Rule-based: Clinical Summary (deterministic — no LLM)
+# ---------------------------------------------------------------------------
+def _build_clinical_summary(measurements):
+    """Build a cohesive clinical summary paragraph from the measurements.
+
+    This replaces the LLM-generated summary which repeatedly failed Gemini
+    validation by contradicting the rule-based findings (3 failed validations).
+    Fully deterministic — impossible to contradict the findings above.
+    """
+    sentences = []
+
+    anb = _get(measurements, "ANB")
+    sna = _get(measurements, "SNA")
+    snb = _get(measurements, "SNB")
+    steiner_mp = _get(measurements, "Mandibular Plane")
+    ricketts_mp = _get(measurements, "Mandibular Plane Angle")
+    ia = _get(measurements, "Interincisal Angle")
+    max_len = _get(measurements, "Maxillary Length")
+    mand_len = _get(measurements, "Mandibular Length")
+    facial_conv = _get(measurements, "Facial Convexity")
+    fda = _get(measurements, "Facial Depth Angle")
+    lfh = _get(measurements, "Lower Facial Height %")
+    afh = _get(measurements, "Anterior Facial Height")
+
+    # --- Sentence 1: Skeletal classification + source ---
+    if anb and anb["value"] is not None:
+        v = anb["value"]
+        if v > 4:
+            skel = f"The cephalometric analysis reveals a Skeletal Class II relationship (ANB {v}°, Steiner norm 2°)"
+        elif v > 2:
+            skel = f"The cephalometric analysis reveals a mild Skeletal Class II tendency (ANB {v}°, Steiner norm 2°)"
+        elif v < 0:
+            skel = f"The cephalometric analysis reveals a Skeletal Class III relationship (ANB {v}°, Steiner norm 2°)"
+        elif v < 2:
+            skel = f"The cephalometric analysis reveals a mild Skeletal Class III tendency (ANB {v}°, Steiner norm 2°)"
+        else:
+            skel = f"The cephalometric analysis reveals a Skeletal Class I relationship (ANB {v}°, Steiner norm 2°)"
+
+        # Add source of discrepancy
+        sna_s = sna["status"] if sna else None
+        snb_s = snb["status"] if snb else None
+        sna_v = sna["value"] if sna else None
+        snb_v = snb["value"] if snb else None
+
+        if v > 2:
+            if snb_s == "low" and sna_s in ("normal", None):
+                skel += f", primarily attributed to mandibular retrusion (SNB {snb_v}°, below the norm of 80°) with a normally positioned maxilla (SNA {sna_v}°)"
+            elif sna_s == "high" and snb_s in ("normal", None):
+                skel += f", primarily attributed to maxillary protrusion (SNA {sna_v}°, above the norm of 82°) with a normally positioned mandible (SNB {snb_v}°)"
+            elif sna_s == "high" and snb_s == "low":
+                skel += f", involving both maxillary protrusion (SNA {sna_v}°) and mandibular retrusion (SNB {snb_v}°)"
+            elif sna_s == "normal" and snb_s == "normal":
+                skel += f" with both SNA ({sna_v}°) and SNB ({snb_v}°) within normal limits, suggesting a dentoalveolar rather than skeletal origin"
+        elif v < 0:
+            if snb_s == "high" and sna_s in ("normal", None):
+                skel += f", primarily attributed to mandibular prognathism (SNB {snb_v}°) with a normally positioned maxilla (SNA {sna_v}°)"
+            elif sna_s == "low" and snb_s in ("normal", None):
+                skel += f", primarily attributed to maxillary retrusion (SNA {sna_v}°) with a normally positioned mandible (SNB {snb_v}°)"
+        else:
+            # Class I — describe jaw positions
+            parts = []
+            if sna and sna_v is not None:
+                if sna_s == "normal":
+                    parts.append(f"normally positioned maxilla (SNA {sna_v}°)")
+                elif sna_s == "high":
+                    parts.append(f"slightly protrusive maxilla (SNA {sna_v}°)")
+                else:
+                    parts.append(f"slightly retrusive maxilla (SNA {sna_v}°)")
+            if snb and snb_v is not None:
+                if snb_s == "normal":
+                    parts.append(f"normally positioned mandible (SNB {snb_v}°)")
+                elif snb_s == "high":
+                    parts.append(f"slightly prognathic mandible (SNB {snb_v}°)")
+                else:
+                    parts.append(f"slightly retrusive mandible (SNB {snb_v}°)")
+            if parts:
+                skel += f" with {' and '.join(parts)}"
+
+        sentences.append(skel + ".")
+
+    # --- Sentence 2: Growth pattern (vertical category — separate from AP) ---
+    patterns = []
+    if steiner_mp and steiner_mp["value"] is not None:
+        patterns.append(("steiner", steiner_mp["status"], steiner_mp["value"]))
+    if ricketts_mp and ricketts_mp["value"] is not None:
+        patterns.append(("ricketts", ricketts_mp["status"], ricketts_mp["value"]))
+
+    if patterns:
+        statuses = [p[1] for p in patterns]
+        if all(s == "low" for s in statuses):
+            gp = "The vertical growth pattern is hypodivergent (horizontal), indicating a short face tendency"
+            if lfh and lfh["value"] is not None and lfh["status"] == "low":
+                gp += " consistent with the decreased lower facial height"
+            sentences.append(gp + ".")
+        elif all(s == "high" for s in statuses):
+            gp = "The vertical growth pattern is hyperdivergent, indicating a long face tendency"
+            if lfh and lfh["value"] is not None and lfh["status"] == "high":
+                gp += " consistent with the increased lower facial height"
+            sentences.append(gp + ".")
+        elif all(s == "normal" for s in statuses):
+            sentences.append("The vertical growth pattern is within normal limits.")
+        else:
+            sentences.append(
+                "The growth pattern indicators show mixed results between Steiner and Ricketts analyses, "
+                "attributable to different reference planes (SN plane vs. Frankfort Horizontal)."
+            )
+
+    # --- Sentence 3: Proportional analysis (jaw sizes — separate category) ---
+    if max_len and mand_len and max_len["value"] and mand_len["value"]:
+        co_a = max_len["value"]
+        co_gn = mand_len["value"]
+
+        # Re-run interpolation to get verdict
+        _table = [
+            (85, 105, 108), (87, 108, 110), (89, 111, 113), (91, 114, 116),
+            (92, 117, 120), (94, 121, 124), (97, 127, 130), (100, 130, 133),
+        ]
+        if co_a <= _table[0][0]:
+            ideal_lo, ideal_hi = _table[0][1], _table[0][2]
+        elif co_a >= _table[-1][0]:
+            ideal_lo, ideal_hi = _table[-1][1], _table[-1][2]
+        else:
+            for i in range(len(_table) - 1):
+                if _table[i][0] <= co_a <= _table[i + 1][0]:
+                    t = (co_a - _table[i][0]) / (_table[i + 1][0] - _table[i][0])
+                    ideal_lo = round(_table[i][1] + t * (_table[i + 1][1] - _table[i][1]))
+                    ideal_hi = round(_table[i][2] + t * (_table[i + 1][2] - _table[i][2]))
+                    break
+
+        if ideal_lo - 2 <= co_gn <= ideal_hi + 2:
+            sentences.append(
+                f"McNamara proportional analysis confirms that the effective jaw lengths are well-matched "
+                f"(Co-A {co_a:.1f}mm, Co-Gn {co_gn:.1f}mm), falling within the expected range."
+            )
+        elif co_gn < ideal_lo - 2:
+            sentences.append(
+                f"McNamara proportional analysis indicates the mandible is short relative to the maxilla "
+                f"(Co-A {co_a:.1f}mm, Co-Gn {co_gn:.1f}mm; expected {ideal_lo}-{ideal_hi}mm)."
+            )
+        else:
+            sentences.append(
+                f"McNamara proportional analysis indicates the mandible is long relative to the maxilla "
+                f"(Co-A {co_a:.1f}mm, Co-Gn {co_gn:.1f}mm; expected {ideal_lo}-{ideal_hi}mm)."
+            )
+
+    # --- Sentence 4: Dental findings (separate category) ---
+    if ia and ia["value"] is not None:
+        v = ia["value"]
+        if ia["status"] == "low":
+            sentences.append(
+                f"Dentally, the acute interincisal angle of {v}° (Steiner norm 131°) indicates "
+                f"proclined incisors that may benefit from uprighting."
+            )
+        elif ia["status"] == "high":
+            sentences.append(
+                f"Dentally, the obtuse interincisal angle of {v}° (Steiner norm 131°) indicates "
+                f"retroclined incisors that may benefit from advancement or correction of axial inclination."
+            )
+        else:
+            sentences.append(
+                f"The interincisal angle of {v}° is within normal limits, suggesting acceptable incisor inclination."
+            )
+
+    # --- Sentence 5: Skeletal vs Dental distinction ---
+    anb_abnormal = anb and anb["value"] is not None and anb["status"] != "normal"
+    ia_abnormal = ia and ia["value"] is not None and ia["status"] != "normal"
+    ia_normal = ia and ia["value"] is not None and ia["status"] == "normal"
+    anb_normal = anb and anb["value"] is not None and anb["status"] == "normal"
+
+    if anb_abnormal and ia_normal:
+        sentences.append(
+            "The discrepancy is primarily skeletal in origin, as the incisor inclination "
+            "is within normal limits despite the abnormal jaw relationship."
+        )
+    elif anb_normal and ia_abnormal:
+        sentences.append(
+            "The issue is dentoalveolar in origin, as the skeletal jaw relationship is "
+            "normal but the incisor inclination is abnormal."
+        )
+    elif anb_abnormal and ia_abnormal:
+        sentences.append(
+            "Both skeletal and dentoalveolar components contribute to the malocclusion."
+        )
+
+    # --- Detect cross-analysis contradictions for treatment logic ---
+    has_landmark_error = False
+    if snb and fda and snb["value"] is not None and fda["value"] is not None:
+        snb_s_tx = snb["status"]
+        fda_s_tx = fda["status"]
+        if (snb_s_tx == "low" and fda_s_tx == "high") or (snb_s_tx == "high" and fda_s_tx == "low"):
+            has_landmark_error = True
+
+    # Determine McNamara proportional verdict for treatment cross-reference
+    mand_proportional = None  # None = no data, "short", "proportional", "long"
+    if max_len and mand_len and max_len["value"] and mand_len["value"]:
+        co_a = max_len["value"]
+        co_gn = mand_len["value"]
+        _table = [
+            (85, 105, 108), (87, 108, 110), (89, 111, 113), (91, 114, 116),
+            (92, 117, 120), (94, 121, 124), (97, 127, 130), (100, 130, 133),
+        ]
+        if co_a <= _table[0][0]:
+            _lo, _hi = _table[0][1], _table[0][2]
+        elif co_a >= _table[-1][0]:
+            _lo, _hi = _table[-1][1], _table[-1][2]
+        else:
+            for i in range(len(_table) - 1):
+                if _table[i][0] <= co_a <= _table[i + 1][0]:
+                    t = (co_a - _table[i][0]) / (_table[i + 1][0] - _table[i][0])
+                    _lo = round(_table[i][1] + t * (_table[i + 1][1] - _table[i][1]))
+                    _hi = round(_table[i][2] + t * (_table[i + 1][2] - _table[i][2]))
+                    break
+        if _lo - 2 <= co_gn <= _hi + 2:
+            mand_proportional = "proportional"
+        elif co_gn < _lo - 2:
+            mand_proportional = "short"
+        else:
+            mand_proportional = "long"
+
+    # --- Sentence 6: Treatment considerations (cross-referenced) ---
+    if has_landmark_error:
+        sentences.append(
+            "Due to contradictory cross-analysis findings (Steiner SNB vs. Ricketts Facial Depth), "
+            "treatment recommendations cannot be reliably made until landmark placement is verified."
+        )
     else:
-        query = "Cephalometric analysis interpretation: all measurements within normal range"
+        tx = []
+        if anb and anb["value"] is not None and anb["value"] > 2:
+            snb_s = snb["status"] if snb else None
+            sna_s = sna["status"] if sna else None
+            if snb_s == "low" and mand_proportional == "long":
+                # CONTRADICTION: SNB says retrusive but McNamara says long
+                tx.append(
+                    "clarifying the mandibular position discrepancy (Steiner SNB suggests retrusion, "
+                    "but McNamara proportional analysis shows a long mandible relative to the maxilla)"
+                )
+            elif snb_s == "low" and mand_proportional != "long":
+                tx.append("addressing the mandibular retrusion")
+            if sna_s == "high":
+                tx.append("managing maxillary excess")
+            if not tx:
+                tx.append("addressing the skeletal discrepancy")
+        elif anb and anb["value"] is not None and anb["value"] < 0:
+            tx.append("addressing the Class III skeletal discrepancy")
 
-    # Retrieve context
-    context_chunks = retrieve_context(query, top_k=6)
+        if ia and ia["value"] is not None and ia["status"] == "low":
+            tx.append("uprighting the proclined incisors")
+        elif ia and ia["value"] is not None and ia["status"] == "high":
+            tx.append("advancing the retroclined incisors")
 
-    # Build prompt
-    user_prompt = build_user_prompt(measurements, context_chunks)
+        if tx:
+            sentences.append(f"Treatment considerations include {', and '.join(tx)}.")
 
-    # Call LLM
+    if not sentences:
+        sentences.append("All cephalometric measurements are within normal limits with no significant skeletal or dental discrepancies identified.")
+
+    return "\n\n".join(sentences)
+
+
+# ---------------------------------------------------------------------------
+# LLM: Clinical Summary via gemma2:9b
+# ---------------------------------------------------------------------------
+# System prompt is baked into the ceph-summary Ollama Modelfile (rag/Modelfile).
+# This eliminates ~500 tokens of system prompt overhead per request.
+
+
+def _generate_llm_summary(deterministic_summary: str) -> str:
+    """Use ceph-summary (custom Ollama model) to polish the deterministic summary.
+
+    System prompt with all textbook norms and rules is baked into the model
+    via the Modelfile, saving ~500 tokens of overhead per request.
+    """
+    user_msg = (
+        "Here is the VERIFIED FACT SHEET from the cephalometric analysis. "
+        "Rewrite it as a polished clinical narrative paragraph. "
+        "Do NOT change any clinical conclusions — only improve the prose flow. "
+        "CRITICAL: Copy all numeric values EXACTLY as written. "
+        "Do NOT substitute one measurement's value for another.\n\n"
+        f"FACT SHEET:\n{deterministic_summary}"
+    )
+
     response = ollama.chat(
         model=LLM_MODEL,
         messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
+            {"role": "user", "content": user_msg},
         ],
-        options={"temperature": 0, "seed": 42, "num_predict": 1200},
+        options={
+            "num_gpu": 99,
+        },
+        keep_alive="10m",
     )
+    return response["message"]["content"].strip()
 
-    diagnosis = response["message"]["content"]
 
-    # Append clinical disclaimer
+# ---------------------------------------------------------------------------
+# Public API: generate_diagnosis
+# ---------------------------------------------------------------------------
+def generate_diagnosis(measurements: list[dict]) -> str:
+    """
+    Hybrid diagnosis pipeline:
+      1. Rule-based: Skeletal Pattern (instant, deterministic)
+      2. Rule-based: Key Findings (instant, deterministic)
+      3. Rule-based: Deterministic Clinical Summary (fact sheet)
+      4. LLM (gemma2:9b): Polish the fact sheet into clinical prose
+      5. Append clinical disclaimer
+    Falls back to deterministic summary if LLM call fails.
+    """
+    skeletal = _build_skeletal_pattern(measurements)
+    findings = _build_key_findings(measurements)
+
+    # Build deterministic fact sheet first (always correct)
+    deterministic_summary = _build_clinical_summary(measurements)
+
+    # Try to polish with gemma2:9b
+    try:
+        llm_summary = _generate_llm_summary(deterministic_summary)
+        summary = f"### Clinical Summary\n\n{llm_summary}"
+    except Exception:
+        summary = f"### Clinical Summary\n\n{deterministic_summary}"
+
+    diagnosis = f"{skeletal}\n\n{findings}\n\n{summary}"
+
     disclaimer = (
         "\n\n---\n\n"
         "**⚠ Clinical Disclaimer:** This AI-generated analysis is intended as a "
