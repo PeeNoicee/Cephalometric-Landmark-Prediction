@@ -164,8 +164,7 @@ function App() {
 
   return (
     <div className="h-screen flex flex-col bg-slate-950 text-slate-100 overflow-hidden">
-      {/* Mobile header with menu button */}
-      {/* File input — positioned off-screen (NOT display:none) so mobile .click() works */}
+      {/* File input — positioned off-screen so mobile .click() works */}
       <input
         ref={fileRef}
         type="file"

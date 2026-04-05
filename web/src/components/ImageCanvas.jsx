@@ -29,39 +29,30 @@ const ImageCanvas = forwardRef(function ImageCanvas({
   const imgRef = useRef(null);
   const [imgLoaded, setImgLoaded] = useState(false);
 
-  // Expose canvas data URL to parent for PDF export
   useImperativeHandle(ref, () => ({
     getCanvasDataURL: () => canvasRef.current?.toDataURL("image/png"),
     getOriginalCanvasDataURL: () => {
-      // Create a temporary canvas to draw the image at original size without zoom/pan
       const canvas = canvasRef.current;
       const img = imgRef.current;
       if (!canvas || !img) return null;
 
-      // Use natural dimensions (original image size, not rendered size)
       const origWidth = img.naturalWidth || img.width;
       const origHeight = img.naturalHeight || img.height;
 
       const tempCanvas = document.createElement("canvas");
       const tempCtx = tempCanvas.getContext("2d");
-      
-      // Set canvas to original image dimensions
       tempCanvas.width = origWidth;
       tempCanvas.height = origHeight;
 
-      // Draw the image at original size (no transformations)
       tempCtx.drawImage(img, 0, 0, origWidth, origHeight);
 
-      // Draw landmarks and tracing at original coordinates
       if (landmarks && landmarks.length > 0) {
-        // Calculate scale factor for landmarks and labels
-        // We want landmarks to be visible regardless of image size
-        const scaleFactor = Math.min(origWidth, origHeight) / 1000; // Scale based on image size
+        // Scale landmark radius/font relative to image size
+        const scaleFactor = Math.min(origWidth, origHeight) / 1000;
         const landmarkRadius = Math.max(3, Math.min(8, 6 * scaleFactor)); // 3-8px radius
         const labelFontSize = Math.max(10, Math.min(16, 12 * scaleFactor)); // 10-16px font
         const lineWidth = Math.max(1, Math.min(3, 2 * scaleFactor)); // 1-3px lines
         
-        // Tracing lines
         if (showTracing && analysisType) {
           const segs = TRACING_SEGMENTS[analysisType] || [];
           segs.forEach(([label, from, to], i) => {
@@ -83,7 +74,6 @@ const ImageCanvas = forwardRef(function ImageCanvas({
           });
         }
 
-        // Landmarks
         if (showLandmarks) {
           landmarks.forEach((lm, i) => {
             const color = LANDMARK_COLORS[i % LANDMARK_COLORS.length];

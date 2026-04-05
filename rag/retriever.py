@@ -793,12 +793,7 @@ def _build_key_findings(measurements):
 # Rule-based: Clinical Summary (deterministic — no LLM)
 # ---------------------------------------------------------------------------
 def _build_clinical_summary(measurements):
-    """Build a cohesive clinical summary paragraph from the measurements.
-
-    This replaces the LLM-generated summary which repeatedly failed Gemini
-    validation by contradicting the rule-based findings (3 failed validations).
-    Fully deterministic — impossible to contradict the findings above.
-    """
+    """Build a deterministic clinical summary from measurement values."""
     sentences = []
 
     anb = _get(measurements, "ANB")
