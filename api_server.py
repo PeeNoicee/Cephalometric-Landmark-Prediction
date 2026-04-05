@@ -158,6 +158,13 @@ def run_inference(pil_image: Image.Image) -> dict:
 
     coords = extract_coordinates_from_heatmaps(heatmaps, method="argmax")
 
+    # Per-landmark confidence: peak heatmap value, normalized 0-1 relative to the
+    # most-confident landmark in this image (best = 1.0, worst = 0.0).
+    heatmaps_np = heatmaps.cpu().numpy()[0]  # (NUM_LANDMARKS, H, W)
+    peak_values = heatmaps_np.max(axis=(1, 2))  # (NUM_LANDMARKS,)
+    p_max = float(peak_values.max())
+    conf_scores = (peak_values / p_max) if p_max > 0 else np.ones(len(peak_values))
+
     scale_x = orig_w / config.HEATMAP_SIZE[1]
     scale_y = orig_h / config.HEATMAP_SIZE[0]
 
@@ -175,6 +182,7 @@ def run_inference(pil_image: Image.Image) -> dict:
             "short": LANDMARK_SHORT[i],
             "x": round(float(coords[i, 0]), 2),
             "y": round(float(coords[i, 1]), 2),
+            "confidence": round(float(conf_scores[i]), 4),
         })
 
     result = {
@@ -263,9 +271,10 @@ async def diagnose(payload: dict):
     try:
         from rag.retriever import generate_diagnosis
         measurements = payload.get("measurements", [])
+        landmark_confidences = payload.get("landmark_confidences", {})
         if not measurements:
             raise HTTPException(status_code=400, detail="No measurements provided")
-        diagnosis = generate_diagnosis(measurements)
+        diagnosis = generate_diagnosis(measurements, landmark_confidences)
         return {"diagnosis": diagnosis}
     except HTTPException:
         raise
