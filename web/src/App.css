@@ -1,40 +1,178 @@
 /* Custom styles - TailwindCSS handles most styling */
 
-/* Diagnosis markdown rendering */
+/* ── Base ───────────────────────────────────────────────────────────────── */
+.diagnosis-markdown {
+  line-height: 1.65;
+  font-size: 0.75rem;
+}
+
+/* ── Section headings ───────────────────────────────────────────────────── */
 .diagnosis-markdown h1,
 .diagnosis-markdown h2,
 .diagnosis-markdown h3 {
   font-weight: 700;
-  color: rgb(196, 181, 253); /* violet-300 */
+  margin-top: 1rem;
+  margin-bottom: 0.45rem;
+  padding: 0.3rem 0.65rem;
+  border-left: 3px solid rgb(99, 102, 241);   /* indigo-500 */
+  background: rgba(99, 102, 241, 0.08);
+  border-radius: 0 5px 5px 0;
+  display: block;
+}
+/* First heading needs no top gap */
+.diagnosis-markdown h1:first-child,
+.diagnosis-markdown h2:first-child,
+.diagnosis-markdown h3:first-child { margin-top: 0; }
+
+.diagnosis-markdown h1 { font-size: 0.82rem; color: rgb(196, 181, 253); } /* violet-300 */
+.diagnosis-markdown h2 { font-size: 0.78rem; color: rgb(165, 180, 252); } /* indigo-300 */
+.diagnosis-markdown h3 { font-size: 0.75rem; color: rgb(165, 180, 252); }
+
+/* ── Blockquote — amber callout card (age warnings etc.) ────────────────── */
+.diagnosis-markdown blockquote {
+  margin: 0.6rem 0;
+  padding: 0.55rem 0.8rem;
+  border-left: 3px solid rgb(251, 191, 36);   /* amber-400 */
+  background: rgba(251, 191, 36, 0.07);
+  border-radius: 0 6px 6px 0;
+}
+.diagnosis-markdown blockquote p {
+  margin-bottom: 0.2rem;
+  color: rgb(253, 224, 71);                   /* amber-300 */
+}
+.diagnosis-markdown blockquote strong {
+  color: rgb(254, 240, 138);                  /* amber-200 */
+}
+.diagnosis-markdown blockquote em {
+  color: rgb(253, 224, 71);
+}
+.diagnosis-markdown blockquote ul,
+.diagnosis-markdown blockquote ol {
+  color: rgb(253, 224, 71);
+  padding-left: 1.1rem;
+  margin: 0.25rem 0 0;
+}
+
+/* ── Disclaimer blockquote — red warning card (contains h2) ─────────────── */
+.diagnosis-markdown blockquote:has(h2) {
+  border-left: 4px solid rgb(239, 68, 68);    /* red-500 */
+  background: rgba(239, 68, 68, 0.08);
+  border-radius: 0 8px 8px 0;
+  padding: 0.7rem 1rem;
   margin-top: 0.75rem;
-  margin-bottom: 0.35rem;
 }
-.diagnosis-markdown h1 { font-size: 0.85rem; }
-.diagnosis-markdown h2 { font-size: 0.8rem; }
-.diagnosis-markdown h3 { font-size: 0.75rem; }
+.diagnosis-markdown blockquote:has(h2) h2 {
+  /* Override the default h2 pill style inside the disclaimer */
+  border-left: none;
+  background: none;
+  border-radius: 0;
+  padding: 0;
+  margin-top: 0;
+  margin-bottom: 0.45rem;
+  font-size: 0.78rem;
+  color: rgb(252, 165, 165);                  /* red-300 */
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.diagnosis-markdown blockquote:has(h2) p {
+  color: rgb(252, 165, 165);                  /* red-300 */
+}
+.diagnosis-markdown blockquote:has(h2) strong {
+  color: rgb(254, 202, 202);                  /* red-200 */
+}
+.diagnosis-markdown blockquote:has(h2) em {
+  color: rgb(252, 165, 165);
+  font-style: italic;
+}
+.diagnosis-markdown blockquote:has(h2) ul,
+.diagnosis-markdown blockquote:has(h2) ol {
+  color: rgb(252, 165, 165);
+  padding-left: 1.2rem;
+  margin: 0.3rem 0 0;
+}
+.diagnosis-markdown blockquote:has(h2) li {
+  color: rgb(252, 165, 165);
+  margin-bottom: 0.3rem;
+}
+.diagnosis-markdown blockquote:has(h2) li::marker {
+  color: rgb(239, 68, 68);
+}
 
+/* ── Paragraphs ─────────────────────────────────────────────────────────── */
 .diagnosis-markdown p {
-  margin-bottom: 0.5rem;
+  margin-bottom: 0.45rem;
+  color: rgb(203, 213, 225);                  /* slate-300 */
 }
 
+/* ── Inline formatting ──────────────────────────────────────────────────── */
 .diagnosis-markdown strong {
-  color: rgb(226, 232, 240); /* slate-200 */
+  color: rgb(226, 232, 240);                  /* slate-200 */
   font-weight: 600;
 }
+.diagnosis-markdown em {
+  color: rgb(148, 163, 184);                  /* slate-400 */
+  font-style: italic;
+}
 
+/* ── Lists ──────────────────────────────────────────────────────────────── */
 .diagnosis-markdown ul,
 .diagnosis-markdown ol {
-  padding-left: 1.1rem;
+  padding-left: 1.2rem;
   margin-bottom: 0.5rem;
 }
+.diagnosis-markdown ul  { list-style-type: disc; }
+.diagnosis-markdown ol  { list-style-type: decimal; }
+.diagnosis-markdown li  { margin-bottom: 0.25rem; color: rgb(203, 213, 225); }
+.diagnosis-markdown li::marker { color: rgb(139, 92, 246); }     /* violet-500 */
 
-.diagnosis-markdown ul { list-style-type: disc; }
-.diagnosis-markdown ol { list-style-type: decimal; }
-
-.diagnosis-markdown li {
-  margin-bottom: 0.2rem;
+/* ── Horizontal rule ────────────────────────────────────────────────────── */
+.diagnosis-markdown hr {
+  border: none;
+  border-top: 1px solid rgb(51, 65, 85);      /* slate-700 */
+  margin: 0.8rem 0;
 }
 
-.diagnosis-markdown li::marker {
-  color: rgb(139, 92, 246); /* violet-500 */
+/* ── Tables ─────────────────────────────────────────────────────────────── */
+.diagnosis-table-wrap {
+  margin: 0.5rem 0 0.85rem;
+  border: 1px solid rgb(51, 65, 85);          /* slate-700 */
+  border-radius: 8px;
 }
+.diagnosis-table-wrap table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.68rem;
+}
+
+.diagnosis-markdown thead tr {
+  background: linear-gradient(90deg, rgb(30, 27, 75) 0%, rgb(30, 41, 59) 100%);
+}
+.diagnosis-markdown th {
+  padding: 5px 8px;
+  text-align: center;
+  font-weight: 600;
+  color: rgb(148, 163, 184);                  /* slate-400 */
+  border-bottom: 1px solid rgb(51, 65, 85);
+  letter-spacing: 0.02em;
+}
+
+.diagnosis-markdown td {
+  padding: 4px 8px;
+  text-align: center;
+  border-bottom: 1px solid rgba(51, 65, 85, 0.5);
+  color: rgb(203, 213, 225);
+  transition: background 0.1s;
+}
+.diagnosis-markdown tbody tr:last-child td { border-bottom: none; }
+.diagnosis-markdown tbody tr:nth-child(even) {
+  background-color: rgba(30, 41, 59, 0.55);
+}
+.diagnosis-markdown tbody tr:hover {
+  background-color: rgba(99, 102, 241, 0.1);
+}
+
+/* Status cell colour classes (applied by custom td component in App.jsx) */
+.diagnosis-markdown td.status-high    { color: rgb(248, 113, 113); font-weight: 600; } /* red-400   */
+.diagnosis-markdown td.status-low     { color: rgb(251, 191, 36);  font-weight: 600; } /* amber-400 */
+.diagnosis-markdown td.status-normal  { color: rgb(52, 211, 153);  font-weight: 600; } /* emerald-400 */
+.diagnosis-markdown td.status-closest { font-weight: 700; text-decoration: underline dotted; }
