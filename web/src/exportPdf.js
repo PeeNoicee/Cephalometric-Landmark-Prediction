@@ -57,20 +57,19 @@ export function exportPdf({ canvasDataURL, landmarks, pixelSpacing, fileName, an
 
   // ── X-ray image ──
   if (canvasDataURL) {
-    // Get image properties to calculate proper aspect ratio
+    // Get image properties to calculate proper dimensions
     const imgInfo = pdf.getImageProperties(canvasDataURL);
     const aspectRatio = imgInfo.width / imgInfo.height;
     
-    // Calculate size based on original image ratio but scaled to fit PDF
-    // We want to maintain the same visual appearance as in the web interface
-    const imgMaxH = 110;
-    const imgMaxW = contentW * 0.9; // Use 90% of content width for better visibility
+    // Fixed max dimensions
+    const imgMaxH = 110; // 110mm max height
+    const imgMaxW = contentW * 0.9; // 90% of page width max
     
     // Calculate display size maintaining aspect ratio
     let displayH = imgMaxH;
     let displayW = displayH * aspectRatio;
     
-    // If width exceeds maximum, recalculate based on width
+    // If too wide, scale down proportionally
     if (displayW > imgMaxW) {
       displayW = imgMaxW;
       displayH = displayW / aspectRatio;
@@ -79,7 +78,7 @@ export function exportPdf({ canvasDataURL, landmarks, pixelSpacing, fileName, an
     // Center the image horizontally
     const x = margin + (contentW - displayW) / 2;
     
-    // Add image with calculated dimensions (maintains what you see in web)
+    // Add image once at correct position with correct dimensions
     pdf.addImage(canvasDataURL, "PNG", x, y, displayW, displayH);
     y += displayH + 6;
   }
@@ -180,24 +179,145 @@ export function exportPdf({ canvasDataURL, landmarks, pixelSpacing, fileName, an
   }
 
   /**
+   * Render a parsed markdown table (array of header strings + array of row arrays)
+   * as a visual jsPDF table with coloured status cells.
+   */
+  function renderMdTable(headers, rows) {
+    if (!headers.length || !rows.length) return;
+    if (y > pageH - 20) { pdf.addPage(); y = margin; }
+
+    const numCols = headers.length;
+    const colW = contentW / numCols;
+    const rowH = 6;
+
+    // Helper: decide fill/text colour from a cell's content
+    function cellColor(cell) {
+      if (/High|\u2191/.test(cell))   return { text: [220, 38, 38],  bold: false }; // red
+      if (/Low|\u2193/.test(cell))    return { text: [217, 119, 6],  bold: false }; // amber
+      if (/Normal|\u2713/.test(cell)) return { text: [5, 150, 105],  bold: false }; // green
+      if (/\u2190/.test(cell))        return { text: [79, 70, 229],  bold: true  }; // indigo = closest match
+      return { text: [30, 41, 59], bold: false };
+    }
+
+    // Strip unicode arrows/checkmarks to ASCII for helvetica compatibility
+    function cleanCell(cell) {
+      return cell
+        .replace(/\u2191\s*/g, "")   // ↑
+        .replace(/\u2193\s*/g, "")   // ↓
+        .replace(/\u2713\s*/g, "")   // ✓
+        .replace(/\u2190/g, "<")     // ←
+        .replace(/\*\*/g, "")        // bold markers
+        .trim();
+    }
+
+    // Header row
+    pdf.setFillColor(30, 41, 59);
+    pdf.rect(margin, y, contentW, rowH, "F");
+    pdf.setTextColor(200, 210, 220);
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(7.5);
+    headers.forEach((h, i) => {
+      pdf.text(cleanCell(h), margin + i * colW + 2, y + 4);
+    });
+    y += rowH;
+
+    // Data rows
+    pdf.setFontSize(7.5);
+    rows.forEach((row, rowIdx) => {
+      if (y > pageH - 15) { pdf.addPage(); y = margin; }
+      if (rowIdx % 2 === 0) {
+        pdf.setFillColor(241, 245, 249);
+        pdf.rect(margin, y, contentW, rowH, "F");
+      }
+      row.forEach((cell, ci) => {
+        const { text: tc, bold } = cellColor(cell);
+        pdf.setTextColor(...tc);
+        pdf.setFont("helvetica", bold ? "bold" : "normal");
+        pdf.text(cleanCell(cell), margin + ci * colW + 2, y + 4);
+      });
+      y += rowH;
+    });
+    y += 4;
+  }
+
+  /**
    * Render markdown-formatted diagnosis text into the PDF with proper formatting.
+   * Handles: ### headings, > blockquotes, bullet lists, numbered lists,
+   * markdown pipe tables, *italic* captions, and **bold** inline text.
    */
   function renderMarkdown(md) {
     const textX = margin + 3;
     const bulletX = margin + 6;
+    const quoteX = margin + 5;
     const textW = contentW - 8;
+    const quoteW = contentW - 10;
     // Replace emoji warning symbol with text for PDF compatibility
-    const safeMd = md.replace(/\u26a0/g, "[WARNING]");
+    const safeMd = md
+      .replace(/\u26a0/g, "[WARNING]")
+      .replace(/\u2714/g, "[OK]")
+      .replace(/\u{1F6AB}/gu, "[BLOCK]");
     const rawLines = safeMd.split("\n");
 
-    for (const raw of rawLines) {
+    let i = 0;
+    while (i < rawLines.length) {
+      const raw = rawLines[i];
       const trimmed = raw.trim();
-      if (!trimmed) { y += 2; continue; }
 
-      // Page break guard
+      if (!trimmed) { y += 2; i++; continue; }
       if (y > pageH - 18) { pdf.addPage(); y = margin; }
 
-      // ### Heading
+      // ── Markdown table detection ──────────────────────────────────────
+      // A table starts with a header row (|...|) immediately followed by a
+      // separator row (|---|) on the next line.
+      const isTableRow = (s) => /^\|.+\|$/.test(s);
+      const isSeparator = (s) => /^\|[\s\-:|]+\|$/.test(s);
+      if (
+        isTableRow(trimmed) &&
+        i + 1 < rawLines.length &&
+        isSeparator(rawLines[i + 1].trim())
+      ) {
+        // Parse header columns
+        const headers = trimmed
+          .split("|")
+          .slice(1, -1)
+          .map((c) => c.trim());
+        i += 2; // skip header + separator
+        const tableRows = [];
+        while (i < rawLines.length && isTableRow(rawLines[i].trim())) {
+          const cols = rawLines[i]
+            .trim()
+            .split("|")
+            .slice(1, -1)
+            .map((c) => c.trim());
+          tableRows.push(cols);
+          i++;
+        }
+        renderMdTable(headers, tableRows);
+        continue;
+      }
+
+      // ── Blockquote: > text ────────────────────────────────────────────
+      if (/^>/.test(trimmed)) {
+        const quoteText = trimmed.replace(/^>+\s*/, "");
+        if (quoteText) {
+          pdf.setFillColor(226, 232, 240);
+          pdf.rect(margin, y, 2, 4.5, "F");
+          pdf.setTextColor(71, 85, 105);
+          pdf.setFont("helvetica", "italic");
+          pdf.setFontSize(8);
+          const wrapped = pdf.splitTextToSize(stripBold(quoteText), quoteW);
+          wrapped.forEach((line) => {
+            if (y > pageH - 15) { pdf.addPage(); y = margin; }
+            pdf.text(line, quoteX, y + 3);
+            y += 4.5;
+          });
+        } else {
+          y += 1;
+        }
+        i++; continue;
+      }
+
+      // ── ### Heading ───────────────────────────────────────────────────
       if (/^#{1,3}\s/.test(trimmed)) {
         const headingText = trimmed.replace(/^#{1,3}\s+/, "");
         y += 2;
@@ -206,25 +326,41 @@ export function exportPdf({ canvasDataURL, landmarks, pixelSpacing, fileName, an
         pdf.setTextColor(0, 140, 135);
         pdf.text(stripBold(headingText), textX, y + 3);
         y += 6;
-        continue;
+        i++; continue;
       }
 
-      // Numbered list: 1. **text**: description
+      // ── Italic caption line: *text* ───────────────────────────────────
+      if (/^\*[^*].*[^*]\*$/.test(trimmed)) {
+        const caption = trimmed.replace(/^\*|\*$/g, "");
+        pdf.setFont("helvetica", "italic");
+        pdf.setFontSize(7.5);
+        pdf.setTextColor(100, 116, 139);
+        const wrapped = pdf.splitTextToSize(caption, textW);
+        wrapped.forEach((line) => {
+          if (y > pageH - 15) { pdf.addPage(); y = margin; }
+          pdf.text(line, textX, y + 3);
+          y += 4;
+        });
+        i++; continue;
+      }
+
+      // ── Numbered list: 1. text ────────────────────────────────────────
       const numMatch = trimmed.match(/^(\d+)\.\s+(.*)/);
       if (numMatch) {
         renderInlineFormatted(numMatch[2], bulletX, textW - 4, true, numMatch[1] + ". ");
-        continue;
+        i++; continue;
       }
 
-      // Bullet: - text
+      // ── Bullet: - text or  - text (indented) ─────────────────────────
       if (/^[-*]\s/.test(trimmed)) {
         const bulletText = trimmed.replace(/^[-*]\s+/, "");
         renderInlineFormatted(bulletText, bulletX, textW - 4, true);
-        continue;
+        i++; continue;
       }
 
-      // Normal paragraph
+      // ── Normal paragraph ─────────────────────────────────────────────
       renderInlineFormatted(trimmed, textX, textW, false);
+      i++;
     }
     y += 3;
   }
