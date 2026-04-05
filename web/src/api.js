@@ -17,11 +17,11 @@ export async function checkHealth() {
   return res.json();
 }
 
-export async function generateDiagnosis(measurements) {
+export async function generateDiagnosis(measurements, landmarkConfidences = {}) {
   const res = await fetch(`${BASE}/api/diagnose`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ measurements }),
+    body: JSON.stringify({ measurements, landmark_confidences: landmarkConfidences }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
