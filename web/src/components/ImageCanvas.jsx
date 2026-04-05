@@ -6,7 +6,8 @@ const TRACING_LINE_COLORS = [
   "#DDA0DD", "#98D8C8", "#F7DC6F", "#BB8FCE", "#85C1E9",
 ];
 
-const DRAG_THRESHOLD = 15;
+const DRAG_THRESHOLD = 15;       // mouse hit radius (px)
+const TOUCH_DRAG_THRESHOLD = 32;  // finger hit radius (px) — larger for touch
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 8;
 const ZOOM_STEP = 1.15;
@@ -37,18 +38,29 @@ const ImageCanvas = forwardRef(function ImageCanvas({
       const img = imgRef.current;
       if (!canvas || !img) return null;
 
+      // Use natural dimensions (original image size, not rendered size)
+      const origWidth = img.naturalWidth || img.width;
+      const origHeight = img.naturalHeight || img.height;
+
       const tempCanvas = document.createElement("canvas");
       const tempCtx = tempCanvas.getContext("2d");
       
       // Set canvas to original image dimensions
-      tempCanvas.width = img.width;
-      tempCanvas.height = img.height;
+      tempCanvas.width = origWidth;
+      tempCanvas.height = origHeight;
 
       // Draw the image at original size (no transformations)
-      tempCtx.drawImage(img, 0, 0, img.width, img.height);
+      tempCtx.drawImage(img, 0, 0, origWidth, origHeight);
 
       // Draw landmarks and tracing at original coordinates
       if (landmarks && landmarks.length > 0) {
+        // Calculate scale factor for landmarks and labels
+        // We want landmarks to be visible regardless of image size
+        const scaleFactor = Math.min(origWidth, origHeight) / 1000; // Scale based on image size
+        const landmarkRadius = Math.max(3, Math.min(8, 6 * scaleFactor)); // 3-8px radius
+        const labelFontSize = Math.max(10, Math.min(16, 12 * scaleFactor)); // 10-16px font
+        const lineWidth = Math.max(1, Math.min(3, 2 * scaleFactor)); // 1-3px lines
+        
         // Tracing lines
         if (showTracing && analysisType) {
           const segs = TRACING_SEGMENTS[analysisType] || [];
@@ -62,8 +74,8 @@ const ImageCanvas = forwardRef(function ImageCanvas({
 
             tempCtx.beginPath();
             tempCtx.strokeStyle = TRACING_LINE_COLORS[i % TRACING_LINE_COLORS.length];
-            tempCtx.lineWidth = 1.5;
-            tempCtx.setLineDash([6, 4]);
+            tempCtx.lineWidth = lineWidth;
+            tempCtx.setLineDash([6 * scaleFactor, 4 * scaleFactor]);
             tempCtx.moveTo(a.x, a.y);
             tempCtx.lineTo(b.x, b.y);
             tempCtx.stroke();
@@ -76,27 +88,50 @@ const ImageCanvas = forwardRef(function ImageCanvas({
           landmarks.forEach((lm, i) => {
             const color = LANDMARK_COLORS[i % LANDMARK_COLORS.length];
             const isHighlighted = highlightedLandmark === i;
-            const radius = isHighlighted ? 6 : 4;
+            const radius = isHighlighted ? landmarkRadius * 1.5 : landmarkRadius;
 
             if (isHighlighted) {
               tempCtx.fillStyle = color + "40"; // 25% opacity
               tempCtx.beginPath();
-              tempCtx.arc(lm.x, lm.y, radius + 2, 0, 2 * Math.PI);
+              tempCtx.arc(lm.x, lm.y, radius + 2 * scaleFactor, 0, 2 * Math.PI);
               tempCtx.fill();
             }
 
+            // Draw landmark point
             tempCtx.fillStyle = color;
             tempCtx.beginPath();
             tempCtx.arc(lm.x, lm.y, radius, 0, 2 * Math.PI);
             tempCtx.fill();
+            
+            // Add white border for better visibility
+            tempCtx.strokeStyle = "#ffffff";
+            tempCtx.lineWidth = 1;
+            tempCtx.stroke();
 
             // Labels
             if (showLabels) {
-              tempCtx.fillStyle = "#ffffff";
-              tempCtx.font = "12px sans-serif";
+              // Add text shadow/background for better visibility
+              const labelText = LANDMARK_SHORT[i] || `P${i + 1}`;
+              tempCtx.font = `${labelFontSize}px sans-serif`;
               tempCtx.textAlign = "center";
               tempCtx.textBaseline = "bottom";
-              tempCtx.fillText(LANDMARK_SHORT[i] || `P${i + 1}`, lm.x, lm.y - 6);
+              
+              // Text background for better visibility
+              const metrics = tempCtx.measureText(labelText);
+              const textHeight = labelFontSize;
+              const padding = 2 * scaleFactor;
+              
+              tempCtx.fillStyle = "rgba(0, 0, 0, 0.7)";
+              tempCtx.fillRect(
+                lm.x - metrics.width / 2 - padding,
+                lm.y - textHeight - radius - padding * 2,
+                metrics.width + padding * 2,
+                textHeight + padding * 1.5
+              );
+              
+              // Draw text
+              tempCtx.fillStyle = "#ffffff";
+              tempCtx.fillText(labelText, lm.x, lm.y - radius - padding);
             }
           });
         }
@@ -115,6 +150,7 @@ const ImageCanvas = forwardRef(function ImageCanvas({
 
   const drawParamsRef = useRef({ scale: 1, offsetX: 0, offsetY: 0 });
   const draggingRef = useRef(null);
+  const lastTapRef = useRef(0);   // timestamp of last tap for double-tap detection
   const drawRef = useRef(null);
 
   // Reset zoom/pan when image changes
@@ -140,8 +176,8 @@ const ImageCanvas = forwardRef(function ImageCanvas({
     img.src = imageUrl;
   }, [imageUrl]);
 
-  // Find nearest landmark to canvas coordinates
-  const findNearest = useCallback((canvasX, canvasY) => {
+  // Find nearest landmark within threshold. Pass a larger value for touch input.
+  const findNearest = useCallback((canvasX, canvasY, threshold = DRAG_THRESHOLD) => {
     if (!landmarks || landmarks.length === 0) return null;
     const { scale, offsetX, offsetY } = drawParamsRef.current;
     let bestIdx = null;
@@ -150,7 +186,7 @@ const ImageCanvas = forwardRef(function ImageCanvas({
       const sx = offsetX + lm.x * scale;
       const sy = offsetY + lm.y * scale;
       const d = Math.hypot(canvasX - sx, canvasY - sy);
-      if (d < bestDist && d <= DRAG_THRESHOLD) {
+      if (d < bestDist && d <= threshold) {
         bestDist = d;
         bestIdx = i;
       }
@@ -246,6 +282,142 @@ const ImageCanvas = forwardRef(function ImageCanvas({
     }
     draggingRef.current = null;
   }, []);
+
+  // --- Touch handlers for mobile ---
+  const getTouchPos = useCallback((e, touchIndex = 0) => {
+    const rect = canvasRef.current.getBoundingClientRect();
+    const touch =
+      (e.touches && e.touches[touchIndex]) ||
+      (e.changedTouches && e.changedTouches[touchIndex]);
+    if (!touch) return { x: 0, y: 0 };
+    return {
+      x: touch.clientX - rect.left,
+      y: touch.clientY - rect.top,
+    };
+  }, []);
+
+  const handleTouchStart = useCallback((e) => {
+    e.preventDefault();
+
+    if (e.touches.length === 1) {
+      const { x, y } = getTouchPos(e);
+
+      // Double-tap detection → reset zoom
+      const now = Date.now();
+      if (now - lastTapRef.current < 300) {
+        zoomRef.current = 1;
+        panRef.current = null;
+        setZoomDisplay(100);
+        requestDraw();
+        lastTapRef.current = 0;
+        return;
+      }
+      lastTapRef.current = now;
+
+      // Edit mode: try to grab a landmark (use larger touch threshold)
+      if (editMode && landmarks) {
+        const idx = findNearest(x, y, TOUCH_DRAG_THRESHOLD);
+        if (idx !== null) {
+          draggingRef.current = idx;
+          panningRef.current = null; // not panning while dragging
+          requestDraw();
+          return;
+        }
+      }
+
+      // Otherwise start panning
+      draggingRef.current = null;
+      panningRef.current = {
+        startX: x,
+        startY: y,
+        startPanX: panRef.current?.x ?? 0,
+        startPanY: panRef.current?.y ?? 0,
+      };
+    } else if (e.touches.length === 2) {
+      // Pinch-zoom start — cancel any active landmark drag / pan
+      draggingRef.current = null;
+      const t1 = e.touches[0];
+      const t2 = e.touches[1];
+      const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+      // Midpoint of the two fingers (canvas coords)
+      const rect = canvasRef.current.getBoundingClientRect();
+      const midX = ((t1.clientX + t2.clientX) / 2) - rect.left;
+      const midY = ((t1.clientY + t2.clientY) / 2) - rect.top;
+      panningRef.current = {
+        pinchStartDist: dist,
+        pinchStartZoom: zoomRef.current,
+        pinchMidX: midX,
+        pinchMidY: midY,
+        pinchStartPanX: panRef.current?.x ?? 0,
+        pinchStartPanY: panRef.current?.y ?? 0,
+      };
+    }
+  }, [editMode, landmarks, findNearest, getTouchPos, requestDraw]);
+
+  const handleTouchMove = useCallback((e) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    e.preventDefault();
+
+    if (e.touches.length === 1) {
+      const { x, y } = getTouchPos(e);
+
+      // Landmark drag (edit mode)
+      if (draggingRef.current !== null && editMode && onLandmarkMove) {
+        const imgCoords = canvasToImage(x, y);
+        if (imgCoords) onLandmarkMove(draggingRef.current, imgCoords.x, imgCoords.y);
+        requestDraw();
+        return;
+      }
+
+      // Pan
+      if (panningRef.current && !panningRef.current.pinchStartDist) {
+        const { startX, startY, startPanX, startPanY } = panningRef.current;
+        panRef.current = {
+          x: startPanX + (x - startX),
+          y: startPanY + (y - startY),
+        };
+        requestDraw();
+      }
+    } else if (e.touches.length === 2 && panningRef.current?.pinchStartDist) {
+      // Pinch-zoom: scale AND pan simultaneously so the midpoint stays fixed
+      const t1 = e.touches[0];
+      const t2 = e.touches[1];
+      const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+      const { pinchStartDist, pinchStartZoom, pinchMidX, pinchMidY,
+              pinchStartPanX, pinchStartPanY } = panningRef.current;
+
+      const newZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM,
+        pinchStartZoom * (dist / pinchStartDist)));
+      const ratio = newZoom / pinchStartZoom;
+
+      // Keep the pinch midpoint fixed on the image
+      panRef.current = {
+        x: pinchMidX - ratio * (pinchMidX - pinchStartPanX),
+        y: pinchMidY - ratio * (pinchMidY - pinchStartPanY),
+      };
+      zoomRef.current = newZoom;
+      setZoomDisplay(Math.round(newZoom * 100));
+      requestDraw();
+    }
+  }, [editMode, getTouchPos, canvasToImage, onLandmarkMove, requestDraw]);
+
+  const handleTouchEnd = useCallback((e) => {
+    if (e.touches.length === 0) {
+      // All fingers lifted
+      draggingRef.current = null;
+      panningRef.current = null;
+    } else if (e.touches.length === 1 && panningRef.current?.pinchStartDist) {
+      // One finger remains after pinch → transition to pan
+      const { x, y } = getTouchPos(e);
+      panningRef.current = {
+        startX: x,
+        startY: y,
+        startPanX: panRef.current?.x ?? 0,
+        startPanY: panRef.current?.y ?? 0,
+      };
+    }
+  }, [getTouchPos]);
 
   // Zoom with scroll wheel (zoom towards cursor position)
   const handleWheel = useCallback((e) => {
@@ -389,6 +561,17 @@ const ImageCanvas = forwardRef(function ImageCanvas({
           ctx.setLineDash([]);
         }
 
+        // Low-confidence warning ring (dashed red)
+        if (lm.confidence !== undefined && lm.confidence < 0.40) {
+          ctx.beginPath();
+          ctx.arc(sx, sy, 9, 0, Math.PI * 2);
+          ctx.strokeStyle = "#ef4444";
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash([3, 2]);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+
         ctx.beginPath();
         ctx.arc(sx, sy, radius, 0, Math.PI * 2);
         ctx.fillStyle = color;
@@ -399,7 +582,7 @@ const ImageCanvas = forwardRef(function ImageCanvas({
 
         if (showLabels) {
           ctx.font = `${isHighlighted || isDragging ? "bold 12px" : "11px"} 'Segoe UI', sans-serif`;
-          ctx.fillStyle = color;
+          ctx.fillStyle = lm.confidence !== undefined && lm.confidence < 0.40 ? "#ef4444" : color;
           ctx.strokeStyle = "#000";
           ctx.lineWidth = 2.5;
           ctx.strokeText(LANDMARK_SHORT[i], sx + 6, sy - 6);
@@ -416,13 +599,23 @@ const ImageCanvas = forwardRef(function ImageCanvas({
     }
   }, [imgLoaded, landmarks, analysisType, showLandmarks, showLabels, showTracing, highlightedLandmark, editMode]);
 
-  // Attach wheel event with { passive: false } to allow preventDefault
+  // Attach wheel + touch events with { passive: false } so preventDefault() works.
+  // React JSX event handlers are passive by default in modern browsers, which
+  // silently swallows preventDefault() and lets the page scroll/zoom instead.
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    canvas.addEventListener("wheel", handleWheel, { passive: false });
-    return () => canvas.removeEventListener("wheel", handleWheel);
-  }, [handleWheel]);
+    canvas.addEventListener("wheel",      handleWheel,      { passive: false });
+    canvas.addEventListener("touchstart", handleTouchStart, { passive: false });
+    canvas.addEventListener("touchmove",  handleTouchMove,  { passive: false });
+    canvas.addEventListener("touchend",   handleTouchEnd,   { passive: false });
+    return () => {
+      canvas.removeEventListener("wheel",      handleWheel);
+      canvas.removeEventListener("touchstart", handleTouchStart);
+      canvas.removeEventListener("touchmove",  handleTouchMove);
+      canvas.removeEventListener("touchend",   handleTouchEnd);
+    };
+  }, [handleWheel, handleTouchStart, handleTouchMove, handleTouchEnd]);
 
   drawRef.current = draw;
   useEffect(() => { draw(); }, [draw]);
@@ -437,7 +630,7 @@ const ImageCanvas = forwardRef(function ImageCanvas({
     <div ref={containerRef} className="w-full h-full relative">
       <canvas
         ref={canvasRef}
-        className="absolute inset-0 w-full h-full"
+        className="absolute inset-0 w-full h-full touch-none"
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
