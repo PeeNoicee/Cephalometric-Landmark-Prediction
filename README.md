@@ -1,17 +1,22 @@
-# Cephalometric Landmark Detection & AI Diagnosis Web App
+# Cephalometric Landmark Detection & AI Diagnosis
 
-A web application for automatic cephalometric landmark detection and AI-powered clinical diagnosis using HRNet neural networks and RAG (Retrieval-Augmented Generation) with Ollama.
+A web application that automatically detects 29 cephalometric landmarks from lateral skull X-rays and generates an AI-powered clinical diagnosis. Built as a special problem research project, it combines a high-accuracy HRNet deep learning model with a rule-based diagnosis engine backed by three orthodontic textbooks (Steiner, Ricketts, McNamara).
 
-## Features
+---
 
-- **Automatic Landmark Detection**: AI-powered detection of 29 cephalometric landmarks from lateral cephalograms
-- **Clinical Analysis**: Automatic calculation of Steiner, Ricketts, and McNamara cephalometric analyses
-- **AI Diagnosis**: RAG-powered clinical diagnosis based on orthodontic textbooks (Steiner, Ricketts, McNamara)
-- **Web Interface**: Modern React frontend with drag-and-drop image upload
-- **PDF Export**: Professional reports with measurements and AI diagnosis
-- **DICOM Support**: Automatic handling of DICOM files with pixel spacing extraction
+## What It Does
 
-## Performance
+You upload a lateral cephalometric radiograph (JPG, PNG, or DICOM). The app:
+1. Runs the image through an HRNet model to locate 29 anatomical landmarks
+2. Computes Steiner, Ricketts, and McNamara cephalometric analyses automatically
+3. Generates a structured AI diagnosis — skeletal classification, key findings, age-adjusted Ricketts norms, and a clinical summary
+4. Lets you adjust landmarks manually and export a PDF report
+
+The diagnosis engine is **fully deterministic** (rule-based + Qwen 2.5 14B LLM for polishing the summary). It cross-checks analyses against each other and flags suspect landmarks using heatmap confidence scores.
+
+---
+
+## Model Performance
 
 | Metric | This Model | Khan et al. (2025) |
 |--------|-----------|-------------------|
@@ -21,93 +26,218 @@ A web application for automatic cephalometric landmark detection and AI-powered 
 | **SDR@3mm** | **98.94%** | 90.82% |
 | **SDR@4mm** | **99.54%** | 94.82% |
 
-## Quick Start
+---
+
+## Features
+
+- **29-landmark detection** from a single lateral cephalogram
+- **Three analyses**: Steiner, Ricketts, McNamara — calculated and classified automatically
+- **AI diagnosis** with report confidence level, key findings, age-adjusted Ricketts norm tables, and clinical summary
+- **Landmark confidence indicators** — low-confidence landmarks are visually flagged with a dashed ring
+- **Manual landmark editing** — drag any landmark to correct its position
+- **DICOM support** — extracts pixel spacing automatically for accurate mm measurements
+- **PDF export** — full report including the annotated image, measurements table, and AI diagnosis
+- **Mobile-friendly** — pinch to zoom, drag to pan, touch landmark editing
+
+---
+
+## System Requirements
+
+| | Minimum | Recommended |
+|---|---|---|
+| **OS** | Windows 10 / macOS 12 / Ubuntu 20.04 | Windows 11 / Ubuntu 22.04 |
+| **CPU** | Intel i5 | Intel i7 / AMD Ryzen 7 |
+| **RAM** | 8 GB | 16 GB+ |
+| **GPU** | — | NVIDIA RTX 3060+ (CUDA 12.x) |
+| **Storage** | 5 GB free | 10 GB free |
+
+---
+
+## Local Setup
 
 ### Prerequisites
 
-- **Python 3.10+**
-- **Node.js 18+**
-- **Git**
-- **CUDA-compatible GPU** (recommended for inference speed)
+- Python 3.10+
+- Node.js 18+
+- CUDA-compatible GPU (optional but strongly recommended)
 
-### 1. Clone and Setup
+### 1. Clone the repo
 
 ```bash
-# Clone the repository
 git clone https://github.com/PeeNoicee/Cephalometric-Landmark-Detection.git
 cd Cephalometric-Landmark-Detection
+```
 
-# Install Python dependencies
+### 2. Install Python dependencies
+
+```bash
 pip install -r requirements.txt
 ```
 
-### 2. Download the Trained Model
-
-The application requires a pre-trained HRNet model. You'll need to obtain `best_model.pth` and place it in the `checkpoints/` folder:
-
+For GPU acceleration (recommended):
 ```bash
-mkdir -p checkpoints
-# Place best_model.pth in checkpoints/ directory
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 ```
 
-### 3. Install Ollama for AI Diagnosis (Optional)
+### 3. Add the trained model
 
-For AI-powered clinical diagnosis:
+Place `best_model.pth` in the `checkpoints/` folder:
+```
+checkpoints/
+  best_model.pth
+```
 
+### 4. Install Ollama (for AI diagnosis)
+
+Download from [https://ollama.ai/download](https://ollama.ai/download), then pull the model:
 ```bash
-# Install Ollama (if not already installed)
-# Download from: https://ollama.ai/download
-
-# Pull the required model
 ollama pull qwen2.5:14b-instruct-q4_K_M
-
-# Verify installation
-ollama list
 ```
 
-### 4. Setup Frontend
+### 5. Build and run
 
 ```bash
-# Navigate to web directory
+# Install frontend dependencies
 cd web
-
-# Install Node.js dependencies
 npm install
-
-# Build the frontend
 npm run build
-```
+cd ..
 
-### 5. Run the Application
-
-```bash
-# From the root directory, run the web server
+# Start the server
 python api_server.py
 ```
 
-The application will start on:
-- **Frontend**: http://localhost:5173 (development) or http://localhost:8000 (production)
-- **API**: http://localhost:8000/docs (FastAPI documentation)
+Open **http://localhost:8000** in your browser.
 
-## Usage
+For frontend development with hot-reload, run `npm run dev` inside `web/` alongside `python api_server.py`.
 
-### Basic Workflow
+---
 
-1. **Upload Image**: Drag and drop a lateral cephalometric radiograph (JPG/PNG) or DICOM file
-2. **Landmark Detection**: The AI will automatically detect 29 cephalometric landmarks
-3. **View Analysis**: Review the calculated measurements for Steiner, Ricketts, and McNamara analyses
-4. **Generate Diagnosis**: Click "Generate Diagnosis" for AI-powered clinical interpretation
-5. **Export Report**: Download a professional PDF report with measurements and diagnosis
+## Sharing Over the Internet (ngrok)
 
-### Supported File Formats
+ngrok creates a public HTTPS tunnel to your local server — no cloud hosting needed.
 
-- **Images**: JPEG, PNG
-- **DICOM**: Automatic pixel spacing extraction for accurate measurements
-- **PDF Export**: Professional reports with all findings
+### One-time setup
 
-### Landmark Detection
+1. Download ngrok from [https://ngrok.com/download](https://ngrok.com/download)
+2. Sign up at [https://dashboard.ngrok.com/signup](https://dashboard.ngrok.com/signup) and get your authtoken
+3. Register it:
+   ```bash
+   ngrok config add-authtoken YOUR_AUTH_TOKEN
+   ```
 
-The system detects 29 cephalometric landmarks:
+### Start the full stack
+
+Run each of these in a separate terminal:
+
+**Terminal 1 — backend:**
+```bash
+python api_server.py
+```
+
+**Terminal 2 — frontend dev server:**
+```bash
+cd web
+npm run dev
+```
+
+**Terminal 3 — ngrok tunnel:**
+```bash
+ngrok http 5173
+```
+
+The ngrok output shows your public URL:
+```
+Forwarding    https://abcd-1234.ngrok-free.app -> http://localhost:5173
+```
+
+Share that URL with anyone — it works immediately with no firewall changes.
+
+> ⚠️ The URL changes every time you restart ngrok (free tier). The tunnel is only active while your computer is running.
+
+### Quick-start batch script (Windows)
+
+Save this as `start.bat` in the project root:
+```batch
+@echo off
+start "Backend"  cmd /k "python api_server.py"
+timeout /t 3 /nobreak > nul
+start "Frontend" cmd /k "cd web && npm run dev"
+timeout /t 5 /nobreak > nul
+start "Ngrok"    cmd /k "ngrok http 5173"
+```
+
+### ngrok limits (free tier)
+
+- URL changes on each restart
+- 1 GB/day bandwidth
+- 40 requests/minute
+- Single-threaded model inference — users queue up naturally
+
+---
+
+## How to Use
+
+1. **Upload** a lateral cephalogram (JPG, PNG, or DICOM) — drag and drop or click **Select**
+2. **Analyze** — click **Analyze** to run landmark detection
+3. **Review** — inspect landmarks on the canvas, switch between Steiner / Ricketts / McNamara tabs
+4. **Edit** — enable edit mode to drag any misplaced landmark
+5. **Diagnose** — click **Generate Diagnosis** for the full AI report
+6. **Export** — click **Save as PDF** for a printable report
+
+---
+
+## Architecture
+
+### Backend (`api_server.py`)
+
+- **FastAPI** web server serving the React frontend and REST API
+- **HRNet** model (PyTorch) for heatmap-based landmark detection
+- **DICOM handling** via pydicom — extracts pixel spacing for mm-accurate measurements
+
+### Diagnosis engine (`rag/retriever.py`)
+
+- **Rule-based layer** — deterministic skeletal classification, key findings, Ricketts age-adjusted norm tables, cross-analysis contradiction detection
+- **LLM layer** — Qwen 2.5 14B via Ollama polishes the clinical summary; temperature=0 for reproducible output
+- **RAG layer** — ChromaDB vector store with 244 chunks from three orthodontic textbooks (Steiner, Ricketts, McNamara)
+- **Confidence scoring** — heatmap peak values flag unreliable landmarks before they affect the diagnosis
+
+### Frontend (`web/src/`)
+
+- **React 18** + Vite + Tailwind CSS
+- **Canvas-based** landmark rendering with zoom/pan/drag
+- **PDF export** via jsPDF with custom markdown-to-PDF renderer
+- **ReactMarkdown + remark-gfm** for rendering GFM tables in the diagnosis panel
+
+---
+
+## API Reference
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/health` | Server status and model info |
+| `POST` | `/api/predict` | Landmark detection — accepts `multipart/form-data` with `file` |
+| `POST` | `/api/diagnose` | AI diagnosis — accepts JSON `{ measurements, landmark_confidences }` |
+
+### Quick example
+
+```python
+import requests
+
+with open("cephalogram.jpg", "rb") as f:
+    result = requests.post("http://localhost:8000/api/predict", files={"file": f}).json()
+
+diagnosis = requests.post("http://localhost:8000/api/diagnose", json={
+    "measurements": result["measurements"],
+    "landmark_confidences": result["landmark_confidences"],
+}).json()
+
+print(diagnosis["diagnosis"])
+```
+
+---
+
+## Detected Landmarks
 
 | # | Short | Full Name | # | Short | Full Name |
 |---|-------|-----------|---|-------|-----------|
@@ -125,117 +255,32 @@ The system detects 29 cephalometric landmarks:
 | 12 | Ar | Articulare | 27 | N' | Soft Tissue Nasion |
 | 13 | Co | Condylion | 28 | Pog' | Soft Tissue Pogonion |
 | 14 | Gn | Gnathion | 29 | Sn | Subnasale |
-| 15 | Go | Gonion |
+| 15 | Go | Gonion | | | |
 
-## API Reference
-
-### Endpoints
-
-- `GET /api/health` - Health check and system status
-- `POST /api/predict` - Landmark detection from image
-- `POST /api/diagnose` - AI clinical diagnosis from measurements
-
-### Example API Usage
-
-```python
-import requests
-
-# Upload image for landmark detection
-with open('cephalogram.jpg', 'rb') as f:
-    response = requests.post('http://localhost:8000/api/predict', files={'file': f})
-    result = response.json()
-
-# Generate diagnosis from measurements
-measurements = result['measurements']  # From predict endpoint
-diag_response = requests.post('http://localhost:8000/api/diagnose', json={'measurements': measurements})
-diagnosis = diag_response.json()
-```
-
-## System Requirements
-
-### Minimum Requirements
-- **CPU**: Intel i5 or equivalent
-- **RAM**: 8GB
-- **Storage**: 5GB free space
-- **OS**: Windows 10+, macOS 12+, Ubuntu 20.04+
-
-### Recommended Requirements
-- **GPU**: NVIDIA RTX 3060 or better with CUDA 12.8+
-- **RAM**: 16GB+
-- **CPU**: Intel i7 or AMD Ryzen 7+
-
-### Dependencies
-
-#### Python (requirements.txt)
-- PyTorch 2.11+ (CUDA version for GPU acceleration)
-- FastAPI for web API
-- OpenCV, Pillow for image processing
-- ChromaDB for vector database
-- Ollama for LLM integration
-- pdfplumber, pytesseract for PDF text extraction
-
-#### Node.js (web/package.json)
-- React 18+ for frontend
-- Vite for build tooling
-- react-markdown for diagnosis rendering
+---
 
 ## Troubleshooting
 
-### Common Issues
+**Model not loading**
+- Make sure `checkpoints/best_model.pth` exists
+- Run `python -c "import torch; print(torch.cuda.is_available())"` to verify GPU availability
 
-**"Model not loaded" error**
-- Ensure `best_model.pth` is in the `checkpoints/` directory
-- Check that the model file is not corrupted
+**CUDA not detected**
+- Reinstall PyTorch with the correct CUDA version: `pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128`
 
-**CUDA/GPU not detected**
-- Install PyTorch with CUDA: `pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128`
-- Verify CUDA installation: `python -c "import torch; print(torch.cuda.is_available())"`
+**Ollama not responding**
+- Make sure Ollama is running: `ollama serve`
+- Confirm the model is downloaded: `ollama list`
 
-**Ollama connection failed**
-- Ensure Ollama is running: `ollama serve`
-- Verify model is pulled: `ollama pull qwen2.5:14b-instruct-q4_K_M`
+**ngrok `ERR_NGROK_8012`**
+- The frontend dev server probably stopped — restart it with `cd web && npm run dev`
+- Then restart ngrok: `ngrok http 5173`
 
-**Frontend build fails**
-- Clear node_modules: `rm -rf node_modules && npm install`
-- Check Node.js version: `node --version` (should be 18+)
+**Frontend build errors**
+- Delete `web/node_modules` and reinstall: `cd web && npm install`
+- Confirm Node.js version is 18+: `node --version`
 
-### Performance Tips
-
-- **GPU Acceleration**: Use CUDA PyTorch for 5-10x faster inference
-- **Memory**: Close other GPU-intensive applications
-- **Image Size**: Optimal input size is 864x768 pixels
-
-## Architecture
-
-### Backend (Python/FastAPI)
-- **Model**: HRNet for landmark detection
-- **RAG System**: ChromaDB + Ollama Qwen 2.5 14B for diagnosis
-- **Image Processing**: OpenCV + Pillow for preprocessing
-- **DICOM Support**: pydicom for medical image handling
-
-### Frontend (React)
-- **UI**: Modern drag-and-drop interface
-- **Visualization**: Canvas-based landmark display
-- **Export**: jsPDF for PDF generation with markdown support
-
-### AI Diagnosis System
-- **Knowledge Base**: 244 chunks from 3 orthodontic textbooks
-- **Embeddings**: nomic-embed-text for semantic search
-- **LLM**: Qwen 2.5 14B with deterministic temperature=0
-- **Rules**: Textbook-verified clinical interpretation guidelines
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature-name`
-3. Make your changes and test thoroughly
-4. Commit with descriptive messages: `git commit -m "Add feature description"`
-5. Push to your branch: `git push origin feature-name`
-6. Create a Pull Request
-
-## License
-
-See [LICENSE](LICENSE) file.
+---
 
 ## Citation
 
