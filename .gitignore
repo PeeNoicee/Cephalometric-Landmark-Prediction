@@ -39,3 +39,12 @@ build/
 # Node
 node_modules/
 
+# Internal / private docs (not for public repo)
+LLM_DIAGNOSIS_EXPLAINED.md
+
+# Deployment tools
+ngrok.exe
+ngrok.zip
+ngrok-config.yml
+check_deployment.ps1
+
