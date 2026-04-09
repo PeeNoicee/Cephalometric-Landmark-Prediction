@@ -1,10 +1,12 @@
 import { useRef, useEffect, useCallback, useState, forwardRef, useImperativeHandle } from "react";
-import { LANDMARK_SHORT, LANDMARK_NAMES, LANDMARK_COLORS, LANDMARK_INDEX, TRACING_SEGMENTS } from "../constants";
+import { LANDMARK_SHORT, LANDMARK_NAMES, LANDMARK_COLORS, LANDMARK_INDEX, TRACING_SEGMENTS, TRACING_MEASUREMENT_MAP, DEFAULT_PIXEL_SPACING } from "../constants";
+import { computeAnalysis } from "../analysis";
 
-const TRACING_LINE_COLORS = [
-  "#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4", "#FFEAA7",
-  "#DDA0DD", "#98D8C8", "#F7DC6F", "#BB8FCE", "#85C1E9",
-];
+const TRACING_COLOR = "#f43f5e";
+
+function getTracingColor() {
+  return TRACING_COLOR;
+}
 
 const DRAG_THRESHOLD = 15;       // mouse hit radius (px)
 const TOUCH_DRAG_THRESHOLD = 32;  // finger hit radius (px) — larger for touch
@@ -16,6 +18,7 @@ const ImageCanvas = forwardRef(function ImageCanvas({
   imageUrl,
   landmarks,
   analysisType,
+  pixelSpacing = DEFAULT_PIXEL_SPACING,
   showLandmarks = true,
   showLabels = true,
   showTracing = true,
@@ -54,8 +57,10 @@ const ImageCanvas = forwardRef(function ImageCanvas({
         const lineWidth = Math.max(1, Math.min(3, 2 * scaleFactor)); // 1-3px lines
         
         if (showTracing && analysisType) {
+          const analysisResults = computeAnalysis(analysisType, landmarks, pixelSpacing);
+          const resultMap = Object.fromEntries(analysisResults.map(r => [r.name, r.status]));
           const segs = TRACING_SEGMENTS[analysisType] || [];
-          segs.forEach(([label, from, to], i) => {
+          segs.forEach(([label, from, to]) => {
             const fromIdx = LANDMARK_INDEX[from];
             const toIdx = LANDMARK_INDEX[to];
             if (fromIdx === undefined || toIdx === undefined) return;
@@ -64,7 +69,7 @@ const ImageCanvas = forwardRef(function ImageCanvas({
             if (!a || !b) return;
 
             tempCtx.beginPath();
-            tempCtx.strokeStyle = TRACING_LINE_COLORS[i % TRACING_LINE_COLORS.length];
+            tempCtx.strokeStyle = getTracingColor(label, analysisType, resultMap);
             tempCtx.lineWidth = lineWidth;
             tempCtx.setLineDash([6 * scaleFactor, 4 * scaleFactor]);
             tempCtx.moveTo(a.x, a.y);
@@ -495,8 +500,10 @@ const ImageCanvas = forwardRef(function ImageCanvas({
 
     // Tracing lines
     if (showTracing && analysisType) {
+      const analysisResults = computeAnalysis(analysisType, landmarks, pixelSpacing);
+      const resultMap = Object.fromEntries(analysisResults.map(r => [r.name, r.status]));
       const segs = TRACING_SEGMENTS[analysisType] || [];
-      segs.forEach(([label, from, to], i) => {
+      segs.forEach(([label, from, to]) => {
         const fromIdx = LANDMARK_INDEX[from];
         const toIdx = LANDMARK_INDEX[to];
         if (fromIdx === undefined || toIdx === undefined) return;
@@ -510,7 +517,7 @@ const ImageCanvas = forwardRef(function ImageCanvas({
         const by = drawY + b.y * totalScale;
 
         ctx.beginPath();
-        ctx.strokeStyle = TRACING_LINE_COLORS[i % TRACING_LINE_COLORS.length];
+        ctx.strokeStyle = getTracingColor(label, analysisType, resultMap);
         ctx.lineWidth = 1.5;
         ctx.setLineDash([6, 4]);
         ctx.moveTo(ax, ay);

@@ -131,6 +131,33 @@ def print_comparison(metrics: dict):
 
     print("=" * 80)
 
+    # Per-landmark MRE
+    per_lm = metrics.get("per_landmark_error", None)
+    if per_lm is not None:
+        LANDMARK_SHORT = [
+            "A", "ANS", "B", "Me", "N", "Or", "Pog", "PNS", "Prn", "R",
+            "S", "Ar", "Co", "Gn", "Go", "Po", "L5", "L1", "L6",
+            "U5", "U1A", "U1", "U6", "L1A", "Li", "Ls", "N'", "Pog'", "Sn",
+        ]
+        LANDMARK_NAMES = [
+            "A-point", "Anterior Nasal Spine", "B-point", "Menton", "Nasion",
+            "Orbitale", "Pogonion", "Posterior Nasal Spine", "Pronasale", "Ramus",
+            "Sella", "Articulare", "Condylion", "Gnathion", "Gonion",
+            "Porion", "Lower 2nd PM Cusp Tip", "Lower Incisor Tip", "Lower Molar Cusp Tip",
+            "Upper 2nd PM Cusp Tip", "Upper Incisor Apex", "Upper Incisor Tip",
+            "Upper Molar Cusp Tip", "Lower Incisor Apex", "Labrale inferius",
+            "Labrale superius", "Soft Tissue Nasion", "Soft Tissue Pogonion", "Subnasale",
+        ]
+        print("\nPer-Landmark MRE (mm):")
+        print(f"  {'#':<4} {'Short':<6} {'Landmark':<28} {'MRE (mm)':>10}")
+        print(f"  {'─'*4} {'─'*6} {'─'*28} {'─'*10}")
+        for i, err in enumerate(per_lm):
+            short = LANDMARK_SHORT[i] if i < len(LANDMARK_SHORT) else f"L{i}"
+            name = LANDMARK_NAMES[i] if i < len(LANDMARK_NAMES) else f"Landmark {i}"
+            print(f"  {i+1:<4} {short:<6} {name:<28} {err:>10.3f}")
+        print(f"\n  Overall MRE: {_get('MRE'):.3f} mm")
+        print("=" * 80)
+
 
 def main():
     parser = argparse.ArgumentParser()

@@ -26,6 +26,40 @@ The diagnosis engine is **fully deterministic** (rule-based + Qwen 2.5 14B LLM f
 | **SDR@3mm** | **98.94%** | 90.82% |
 | **SDR@4mm** | **99.54%** | 94.82% |
 
+### Per-Landmark MRE (mm)
+
+| # | Short | Landmark | MRE (mm) |
+|---|-------|----------|----------|
+| 1 | A | A-point | 0.657 |
+| 2 | ANS | Anterior Nasal Spine | 0.866 |
+| 3 | B | B-point | 0.583 |
+| 4 | Me | Menton | 0.353 |
+| 5 | N | Nasion | 0.680 |
+| 6 | Or | Orbitale | 0.850 |
+| 7 | Pog | Pogonion | 0.464 |
+| 8 | PNS | Posterior Nasal Spine | 0.915 |
+| 9 | Prn | Pronasale | 0.477 |
+| 10 | R | Ramus | 1.369 |
+| 11 | S | Sella | 0.551 |
+| 12 | Ar | Articulare | 1.029 |
+| 13 | Co | Condylion | 1.114 |
+| 14 | Gn | Gnathion | 0.367 |
+| 15 | Go | Gonion | 1.386 |
+| 16 | Po | Porion | 1.045 |
+| 17 | L5 | Lower 2nd PM Cusp Tip | 0.935 |
+| 18 | L1 | Lower Incisor Tip | 0.657 |
+| 19 | L6 | Lower Molar Cusp Tip | 0.864 |
+| 20 | U5 | Upper 2nd PM Cusp Tip | 0.969 |
+| 21 | U1A | Upper Incisor Apex | 0.840 |
+| 22 | U1 | Upper Incisor Tip | 0.492 |
+| 23 | U6 | Upper Molar Cusp Tip | 0.953 |
+| 24 | L1A | Lower Incisor Apex | 0.771 |
+| 25 | Li | Labrale inferius | 0.610 |
+| 26 | Ls | Labrale superius | 0.520 |
+| 27 | N' | Soft Tissue Nasion | 0.684 |
+| 28 | Pog' | Soft Tissue Pogonion | 0.638 |
+| 29 | Sn | Subnasale | 0.484 |
+
 ---
 
 ## Features

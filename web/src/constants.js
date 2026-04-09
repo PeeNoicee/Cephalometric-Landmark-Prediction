@@ -19,12 +19,7 @@ export const LANDMARK_INDEX = Object.fromEntries(
 );
 
 export const LANDMARK_COLORS = [
-  '#FF0000', '#FF4400', '#FF8800', '#FFCC00', '#FFFF00',
-  '#CCFF00', '#88FF00', '#44FF00', '#00FF00', '#00FF44',
-  '#00FF88', '#00FFCC', '#00FFFF', '#00CCFF', '#0088FF',
-  '#0044FF', '#0000FF', '#4400FF', '#8800FF', '#CC00FF',
-  '#FF00FF', '#FF00CC', '#FF0088', '#FF0044', '#FF0000',
-  '#00FF88', '#FFCC00', '#00CCFF', '#FF00CC',
+  '#44FF00',
 ];
 
 export const TRACING_SEGMENTS = {
@@ -54,6 +49,25 @@ export const TRACING_SEGMENTS = {
     ["Facial Convexity", "A", "N'"],
     ["Mandibular Plane", "Go", "Gn"],
   ],
+};
+
+export const TRACING_MEASUREMENT_MAP = {
+  Steiner: {
+    "Mandibular Plane": "Mandibular Plane",
+  },
+  Ricketts: {
+    "Mandibular Plane":    "Mandibular Plane Angle",
+    "Lower Facial Height": "Lower Facial Height %",
+    "Total Facial Height": "Lower Facial Height %",
+    "Bisector Occlusal":   "Interincisal Angle",
+    "Facial Axis":         "Facial Depth Angle",
+  },
+  McNamara: {
+    "Maxillary Length":      "Maxillary Length",
+    "Mandibular Length":     "Mandibular Length",
+    "Anterior Facial Height":"Anterior Facial Height",
+    "Facial Convexity":      "Facial Convexity",
+  },
 };
 
 export const ANALYSIS_DEFINITIONS = {

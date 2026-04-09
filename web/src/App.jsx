@@ -179,11 +179,8 @@ function App() {
           </div>
           <div>
             <h1 className="text-sm md:text-base font-semibold text-white leading-tight">
-              Ceph Landmark Detection
+              AI-Powered Cephalometric Landmark Detection and Diagnosis
             </h1>
-            <p className="hidden md:block text-xs text-slate-400">
-              AI-powered cephalometric analysis &middot; 29 landmarks
-            </p>
           </div>
         </div>
         
@@ -441,6 +438,7 @@ function App() {
               imageUrl={imageUrl}
               landmarks={landmarks}
               analysisType={analysisType}
+              pixelSpacing={pixelSpacing}
               showLandmarks={showLandmarks}
               showLabels={showLabels}
               showTracing={showTracing}
