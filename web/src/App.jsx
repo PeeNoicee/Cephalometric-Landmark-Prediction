@@ -2,7 +2,7 @@ import { useState, useCallback, useRef } from "react";
 import {
   Upload, Search, FileText, Eye, EyeOff, Tag, Tags,
   PenLine, PenOff, Loader2, Server, ChevronDown, Move, RotateCcw, BrainCircuit,
-  Menu, X, ZoomIn
+  Menu, X, ZoomIn, HelpCircle
 } from "lucide-react";
 import ImageCanvas from "./components/ImageCanvas";
 import AnalysisPanel from "./components/AnalysisPanel";
@@ -36,6 +36,7 @@ function App() {
   const [diagnosisLoading, setDiagnosisLoading] = useState(false);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
   const [showMobileAnalysis, setShowMobileAnalysis] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
 
   const fileRef = useRef(null);
   const canvasRef = useRef(null);
@@ -164,6 +165,103 @@ function App() {
 
   return (
     <div className="h-screen flex flex-col bg-slate-950 text-slate-100 overflow-hidden">
+      {/* Help Modal */}
+      {showHelp && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 px-4"
+          onClick={() => setShowHelp(false)}
+        >
+          <div
+            className="relative bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-lg max-h-[85vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <HelpCircle className="w-5 h-5 text-cyan-400" />
+                <h2 className="text-base font-semibold text-white">How to Use</h2>
+              </div>
+              <button
+                onClick={() => setShowHelp(false)}
+                className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            {/* Modal body */}
+            <div className="px-5 py-4 space-y-5 text-sm text-slate-300">
+              <section>
+                <h3 className="text-xs font-semibold text-cyan-400 uppercase tracking-wider mb-2">1. Load an X-ray Image</h3>
+                <ul className="space-y-1.5 list-disc list-inside text-slate-400">
+                  <li>Click <span className="text-white font-medium">Select X-ray</span> in the sidebar to browse for a file.</li>
+                  <li>Or <span className="text-white font-medium">drag &amp; drop</span> an image directly onto the canvas.</li>
+                  <li>Supported formats: PNG, JPG, BMP, DICOM (.dcm).</li>
+                </ul>
+              </section>
+              <section>
+                <h3 className="text-xs font-semibold text-cyan-400 uppercase tracking-wider mb-2">2. Detect Landmarks</h3>
+                <ul className="space-y-1.5 list-disc list-inside text-slate-400">
+                  <li>Click <span className="text-white font-medium">Analyze Image</span> to run the AI landmark detection model.</li>
+                  <li>Detected landmarks will be overlaid on the X-ray along with tracing lines.</li>
+                </ul>
+              </section>
+              <section>
+                <h3 className="text-xs font-semibold text-cyan-400 uppercase tracking-wider mb-2">3. Edit Landmarks (Optional)</h3>
+                <ul className="space-y-1.5 list-disc list-inside text-slate-400">
+                  <li>Enable <span className="text-white font-medium">Edit Mode</span> in the sidebar to drag any landmark to a corrected position.</li>
+                  <li>Click <span className="text-white font-medium">Reset</span> to undo all manual edits.</li>
+                </ul>
+              </section>
+              <section>
+                <h3 className="text-xs font-semibold text-cyan-400 uppercase tracking-wider mb-2">4. View Cephalometric Analysis</h3>
+                <ul className="space-y-1.5 list-disc list-inside text-slate-400">
+                  <li>Measurements appear in the <span className="text-white font-medium">right panel</span> automatically after analysis.</li>
+                  <li>Switch between <span className="text-white font-medium">Steiner</span>, <span className="text-white font-medium">Ricketts</span>, and <span className="text-white font-medium">McNamara</span> analyses using the dropdown.</li>
+                  <li>Use the display toggles to show/hide <span className="text-white font-medium">Landmarks</span>, <span className="text-white font-medium">Labels</span>, and <span className="text-white font-medium">Tracing Lines</span>.</li>
+                </ul>
+              </section>
+              <section>
+                <h3 className="text-xs font-semibold text-cyan-400 uppercase tracking-wider mb-2">5. Generate AI Diagnosis</h3>
+                <ul className="space-y-1.5 list-disc list-inside text-slate-400">
+                  <li>Click <span className="text-white font-medium">Generate Diagnosis</span> to get an AI-powered interpretation based on the measurements.</li>
+                  <li>The diagnosis references standard cephalometric norms (Steiner, Ricketts, McNamara).</li>
+                </ul>
+              </section>
+              <section>
+                <h3 className="text-xs font-semibold text-cyan-400 uppercase tracking-wider mb-2">6. Export Results</h3>
+                <ul className="space-y-1.5 list-disc list-inside text-slate-400">
+                  <li>Click <span className="text-white font-medium">Save as PDF</span> to export the annotated image, measurements, and diagnosis as a PDF report.</li>
+                </ul>
+              </section>
+              <section>
+                <h3 className="text-xs font-semibold text-cyan-400 uppercase tracking-wider mb-2">Canvas Navigation</h3>
+                <div className="space-y-3">
+                  <div>
+                    <p className="text-xs font-semibold text-slate-300 mb-1">Mouse</p>
+                    <ul className="space-y-1.5 list-disc list-inside text-slate-400">
+                      <li><span className="text-white font-medium">Scroll wheel</span> — zoom in/out towards the cursor position.</li>
+                      <li><span className="text-white font-medium">Left-click &amp; drag</span> on the background — pan the image.</li>
+                      <li><span className="text-white font-medium">Right-click &amp; drag</span> — pan the image (alternative).</li>
+                      <li><span className="text-white font-medium">Middle-click &amp; drag</span> — pan the image.</li>
+                      <li><span className="text-white font-medium">Double-click</span> — reset zoom and re-center the image.</li>
+                      <li><span className="text-white font-medium">Left-click &amp; drag on a landmark</span> — move the landmark (requires <span className="text-amber-400">Edit Mode</span> to be on).</li>
+                    </ul>
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold text-slate-300 mb-1">Touch (Mobile)</p>
+                    <ul className="space-y-1.5 list-disc list-inside text-slate-400">
+                      <li><span className="text-white font-medium">Single finger drag</span> — pan the image.</li>
+                      <li><span className="text-white font-medium">Pinch with two fingers</span> — zoom in/out.</li>
+                      <li><span className="text-white font-medium">Double-tap</span> — reset zoom and re-center the image.</li>
+                      <li><span className="text-white font-medium">Drag a landmark</span> — move it (requires <span className="text-amber-400">Edit Mode</span>).</li>
+                    </ul>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+      )}
       {/* File input — positioned off-screen so mobile .click() works */}
       <input
         ref={fileRef}
@@ -185,12 +283,14 @@ function App() {
         </div>
         
         {/* Mobile menu button */}
-        <button
-          onClick={() => setShowMobileMenu(!showMobileMenu)}
-          className="md:hidden p-2 rounded-lg bg-slate-800 text-slate-300"
-        >
-          <Menu className="w-5 h-5" />
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowMobileMenu(!showMobileMenu)}
+            className="md:hidden p-2 rounded-lg bg-slate-800 text-slate-300"
+          >
+            <Menu className="w-5 h-5" />
+          </button>
+        </div>
         
         <div className="hidden md:flex items-center gap-2">
           {inferenceTime !== null && (
@@ -403,6 +503,15 @@ function App() {
           </div>
           {/* Canvas wrapper — flex-1 min-h-0 keeps it below the action bar */}
           <div className="flex-1 min-h-0 relative">
+            {/* Help button — bottom-right of canvas */}
+            <button
+              onClick={() => setShowHelp(true)}
+              className="absolute bottom-4 right-4 z-20 flex items-center gap-1.5 px-3 py-2 rounded-full bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-cyan-400 shadow-lg backdrop-blur-sm transition-colors text-xs font-medium"
+              title="Help"
+            >
+              Need Help
+              <HelpCircle className="w-4 h-4" />
+            </button>
             {!imageUrl && (
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 text-slate-500 z-10 px-6">
                 <div className="w-20 h-20 rounded-2xl border-2 border-dashed border-slate-700 flex items-center justify-center">
