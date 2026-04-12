@@ -14,6 +14,21 @@ const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 8;
 const ZOOM_STEP = 1.15;
 
+// Per-landmark label offsets [dx, dy]. Default = [+6, -6] (upper-right).
+// Negative dy = above the point, positive dy = below the point.
+const LABEL_OFFSETS = {
+  3:  [  0,  15],  // Me  → below-center
+  13: [  0,  15],  // Gn  → below-center
+  16: [  0,  15],  // L5  → below-center (lower premolar, avoids U5)
+  17: [  0,  15],  // L1  → below-center (lower incisor tip, avoids U1)
+  18: [  0,  15],  // L6  → below-center (lower molar, avoids U6)
+  19: [  0, -12],  // U5  → above-center (upper premolar, avoids L5)
+  20: [-20,  -6],  // U1A → upper-left   (upper incisor apex, avoids U1)
+  21: [  0, -12],  // U1  → above-center (upper incisor tip, avoids L1)
+  22: [  0, -12],  // U6  → above-center (upper molar, avoids L6)
+  23: [-22,   8],  // L1A → left         (lower incisor apex, avoids L1)
+};
+
 const ImageCanvas = forwardRef(function ImageCanvas({
   imageUrl,
   landmarks,
@@ -582,8 +597,13 @@ const ImageCanvas = forwardRef(function ImageCanvas({
           ctx.fillStyle = lm.confidence !== undefined && lm.confidence < 0.40 ? "#ef4444" : color;
           ctx.strokeStyle = "#000";
           ctx.lineWidth = 2.5;
-          ctx.strokeText(LANDMARK_SHORT[i], sx + 6, sy - 6);
-          ctx.fillText(LANDMARK_SHORT[i], sx + 6, sy - 6);
+          const [lx, ly] = LABEL_OFFSETS[i] ?? [0, -6];
+          ctx.textAlign = "center";
+          ctx.textBaseline = ly < 0 ? "bottom" : "top";
+          ctx.strokeText(LANDMARK_SHORT[i], sx + lx, sy + ly);
+          ctx.fillText(LANDMARK_SHORT[i], sx + lx, sy + ly);
+          ctx.textAlign = "left";
+          ctx.textBaseline = "alphabetic";
         }
       });
     }
