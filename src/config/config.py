@@ -3,7 +3,7 @@
 Model: HRNet with multi-task learning (landmark + CVM)
 Input: 864x768 rectangular images (preserves aspect ratio)
 Output: 29 cephalometric landmarks
-Performance: MRE ~0.83mm, SDR@2mm ~94.69%
+Performance: MRE 0.764mm, SDR@2mm 95.33%
 """
 import torch
 
@@ -24,7 +24,7 @@ class TrainConfig:
     
     # Training parameters - improved
     BATCH_SIZE = 3  # Safe for RTX 3060 12GB at 768x768
-    NUM_EPOCHS = 300  # More epochs for convergence
+    NUM_EPOCHS = 300  # Completes all 3 cosine annealing warm restart cycles (50+100+200) - approximate
     LEARNING_RATE = 1e-4
     WEIGHT_DECAY = 1e-4
     

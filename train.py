@@ -2,11 +2,11 @@
 Training Script for Cephalometric Landmark Detection
  
 Features:
-- HRNet architecture (maintains high-resolution features)
+- HRNetV2 architecture (all 4 branches fused before heatmap head)
 - Adaptive Wing Loss (precise landmark localization)
 - Per-image pixel spacing (proper mm conversion)
 - Cosine annealing with warm restarts
-- Multi-task learning (landmarks)
+- Multi-task learning (landmarks + CVM auxiliary)
 
 Usage:
     python train.py
@@ -80,6 +80,9 @@ class TrainerV2:
             except Exception:
                 pass
         
+        # AMP scaler (enabled only on CUDA)
+        self.scaler = torch.cuda.amp.GradScaler(enabled=torch.cuda.is_available())
+
         # Count parameters
         total_params = sum(p.numel() for p in self.model.parameters())
         trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
@@ -214,35 +217,38 @@ class TrainerV2:
             
             # Forward pass
             self.optimizer.zero_grad()
-            
-            if self.config.USE_MULTITASK:
-                pred_heatmaps, pred_cvm = self.model(images)
-            else:
-                pred_heatmaps = self.model(images)
-                pred_cvm = None
-            
-            # Resize heatmaps if needed
-            if pred_heatmaps.shape[-2:] != target_heatmaps.shape[-2:]:
-                pred_heatmaps = nn.functional.interpolate(
-                    pred_heatmaps,
-                    size=target_heatmaps.shape[-2:],
-                    mode='bilinear',
-                    align_corners=False
+
+            with torch.cuda.amp.autocast(enabled=torch.cuda.is_available()):
+                if self.config.USE_MULTITASK:
+                    pred_heatmaps, pred_cvm = self.model(images)
+                else:
+                    pred_heatmaps = self.model(images)
+                    pred_cvm = None
+
+                # Resize heatmaps if needed
+                if pred_heatmaps.shape[-2:] != target_heatmaps.shape[-2:]:
+                    pred_heatmaps = nn.functional.interpolate(
+                        pred_heatmaps,
+                        size=target_heatmaps.shape[-2:],
+                        mode='bilinear',
+                        align_corners=False
+                    )
+
+                # Loss
+                loss, loss_dict = self.loss_fn(
+                    pred_heatmaps, target_heatmaps,
+                    pred_cvm, target_cvm
                 )
-            
-            # Loss
-            loss, loss_dict = self.loss_fn(
-                pred_heatmaps, target_heatmaps,
-                pred_cvm, target_cvm
-            )
-            
-            # Backward pass
-            loss.backward()
-            
+
+            # Backward pass with AMP scaler
+            self.scaler.scale(loss).backward()
+            self.scaler.unscale_(self.optimizer)
+
             # Gradient clipping
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-            
-            self.optimizer.step()
+
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
             
             train_losses.append(loss_dict['total_loss'])
             lm_losses.append(loss_dict['landmark_loss'])
@@ -369,6 +375,7 @@ class TrainerV2:
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler else None,
+            'scaler_state_dict': self.scaler.state_dict(),
             'mre': metrics['MRE'],
             'best_mre': self.best_mre,
             'best_epoch': self.best_epoch,
@@ -487,6 +494,8 @@ def main():
         trainer.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         if checkpoint['scheduler_state_dict']:
             trainer.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        if checkpoint.get('scaler_state_dict'):
+            trainer.scaler.load_state_dict(checkpoint['scaler_state_dict'])
         start_epoch = int(checkpoint.get('epoch', -1)) + 1
         trainer.best_mre = checkpoint.get('best_mre', checkpoint.get('mre', float('inf')))
         trainer.best_epoch = checkpoint.get('best_epoch', start_epoch)

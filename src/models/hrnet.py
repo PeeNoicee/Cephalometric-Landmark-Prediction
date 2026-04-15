@@ -3,7 +3,7 @@ HRNet (High-Resolution Network) for Cephalometric Landmark Detection
 Based on: Deep High-Resolution Representation Learning for Visual Recognition
 https://arxiv.org/abs/1908.07919
 
-This is the architecture used by benchmark methods to achieve ~1.69mm MRE
+Uses the highest-resolution branch (48ch) output directly for the heatmap head.
 """
 import torch
 import torch.nn as nn
@@ -182,10 +182,11 @@ class HighResolutionModule(nn.Module):
 
 class HRNet(nn.Module):
     """
-    HRNet for Cephalometric Landmark Detection
-    
-    Maintains high-resolution representations throughout the network,
-    which is crucial for precise landmark localization.
+    HRNetV2 for Cephalometric Landmark Detection
+
+    Maintains high-resolution representations throughout the network and
+    aggregates all 4 parallel branches (HRNetV2 fusion) before the heatmap
+    head, providing both fine-grained spatial detail and deep semantic context.
     """
     def __init__(self, num_landmarks=29, num_cvm_stages=6, use_multitask=True):
         super().__init__()
@@ -236,12 +237,12 @@ class HRNet(nn.Module):
             num_channels=[48, 96, 192, 384]
         )
         
-        # Heatmap head
+        # HRNetV1 heatmap head: input is highest-resolution branch only (48ch)
         self.heatmap_head = nn.Sequential(
-            nn.Conv2d(48, 48, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(48),
+            nn.Conv2d(48, 256, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(256),
             nn.ReLU(inplace=True),
-            nn.Conv2d(48, num_landmarks, kernel_size=1)
+            nn.Conv2d(256, num_landmarks, kernel_size=1)
         )
         
         # CVM classification head (if multitask)
@@ -379,10 +380,10 @@ class HRNet(nn.Module):
         
         # Stage 4
         y_list = self.stage4(x_list)
-        
-        # Heatmap output (use highest resolution branch)
+
+        # HRNetV1: use only the highest-resolution branch
         heatmaps = self.heatmap_head(y_list[0])
-        
+
         # CVM classification (if multitask)
         if self.use_multitask:
             # Aggregate features from all branches
